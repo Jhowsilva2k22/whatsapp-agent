@@ -38,8 +38,8 @@ async def create_owner(data: OnboardingRequest):
 
 @router.put("/onboarding/{owner_id}/refresh-links")
 async def refresh_owner_links(owner_id: str):
-    result = memory.db.table("owners").select("*").eq("id", owner_id).single().execute()
-    if not result.data:
+    result = memory.db.table("owners").select("*").eq("id", owner_id).maybe_single().execute()
+    if not (result and result.data):
         raise HTTPException(status_code=404, detail="Dono nao encontrado")
     links = result.data.get("links_processed", [])
     if not links:

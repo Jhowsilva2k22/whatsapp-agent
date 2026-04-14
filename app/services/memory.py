@@ -12,8 +12,8 @@ class MemoryService:
         self.db = get_db()
 
     async def get_or_create_customer(self, phone: str, owner_id: str) -> CustomerProfile:
-        result = self.db.table("customers").select("*").eq("phone", phone).eq("owner_id", owner_id).single().execute()
-        if result.data:
+        result = self.db.table("customers").select("*").eq("phone", phone).eq("owner_id", owner_id).maybe_single().execute()
+        if result and result.data:
             return CustomerProfile(**result.data)
         new_customer = CustomerProfile(phone=phone, owner_id=owner_id, first_contact=datetime.utcnow(), last_contact=datetime.utcnow())
         self.db.table("customers").insert(new_customer.model_dump()).execute()
@@ -46,5 +46,5 @@ class MemoryService:
         self.db.table("messages").delete().in_("id", old_ids).execute()
 
     async def get_owner_context(self, owner_id: str) -> Optional[dict]:
-        result = self.db.table("owners").select("*").eq("id", owner_id).single().execute()
-        return result.data if result.data else None
+        result = self.db.table("owners").select("*").eq("id", owner_id).maybe_single().execute()
+        return result.data if result and result.data else None

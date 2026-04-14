@@ -37,8 +37,8 @@ Responda APENAS o JSON."""
             return
         self.db.table("learnings").insert({"owner_id": owner_id, "date": datetime.utcnow().date().isoformat(), "data": learnings, "hot_leads_count": hot_count, "total_conversations": len(set(m['phone'] for m in messages.data))}).execute()
         if learnings.get("suggested_qa"):
-            owner = self.db.table("owners").select("faqs").eq("id", owner_id).single().execute()
-            existing_faqs = owner.data.get("faqs") or []
+            owner = self.db.table("owners").select("faqs").eq("id", owner_id).maybe_single().execute()
+            existing_faqs = (owner.data.get("faqs") if owner and owner.data else None) or []
             new_faqs = [f"{qa['pergunta']} -> {qa['resposta']}" for qa in learnings["suggested_qa"]]
             updated_faqs = list(set(existing_faqs + new_faqs))[:30]
             self.db.table("owners").update({"faqs": updated_faqs}).eq("id", owner_id).execute()

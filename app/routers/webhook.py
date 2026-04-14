@@ -34,5 +34,5 @@ async def health():
 
 async def _get_owner_by_instance(instance: str):
     db = memory.db
-    result = db.table("owners").select("*").eq("evolution_instance", instance).single().execute()
-    return result.data if result.data else None
+    result = db.table("owners").select("*").eq("evolution_instance", instance).maybe_single().execute()
+    return result.data if result and result.data else None
