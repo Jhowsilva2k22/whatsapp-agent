@@ -65,11 +65,19 @@ Responda APENAS o JSON."""
         return b64, ""
 
     async def respond_with_image(self, system_prompt: str, history: list, user_message: str, image_base64: str) -> str:
-        """Responde analisando uma imagem via Claude Vision."""
+        """Responde analisando uma imagem via Claude Vision (Sonnet para maior precisão)."""
         try:
             data, mime = self._parse_base64(image_base64)
             mime = mime or "image/jpeg"
-            caption_text = user_message if user_message and not user_message.startswith("[Imagem") else "Descreva o que tem nessa imagem e responda conforme seu papel de atendente."
+            # Instrução rica: descrever TODOS os detalhes visíveis antes de responder
+            if user_message and not user_message.startswith("[Imagem"):
+                caption_text = user_message
+            else:
+                caption_text = (
+                    "Analise esta imagem com TODOS os detalhes: textos visíveis, títulos, "
+                    "cores, objetos, marcas, números, rostos, cenário — qualquer detalhe relevante. "
+                    "Depois responda de forma natural conforme seu papel de atendente."
+                )
             messages = history + [{
                 "role": "user",
                 "content": [
@@ -78,7 +86,7 @@ Responda APENAS o JSON."""
                 ]
             }]
             response = self.claude.messages.create(
-                model=CLAUDE_HAIKU, max_tokens=MAX_RESPONSE_TOKENS,
+                model=CLAUDE_SONNET, max_tokens=MAX_RESPONSE_TOKENS,
                 system=system_prompt, messages=messages
             )
             return response.content[0].text.strip()
