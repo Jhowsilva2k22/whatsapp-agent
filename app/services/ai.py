@@ -71,55 +71,90 @@ Responda APENAS o JSON."""
             return data, mime
         return b64, ""
 
+    def _build_openai_history(self, history: list) -> list:
+        """Converte histórico para formato OpenAI."""
+        return [{"role": m["role"], "content": m["content"]} for m in history]
+
     async def respond_with_image(self, system_prompt: str, history: list, user_message: str, image_base64: str) -> str:
-        """Responde analisando uma imagem via Claude Vision (Sonnet para maior precisão)."""
-        try:
-            data, mime = self._parse_base64(image_base64)
-            mime = mime or "image/jpeg"
-            # Instrução rica: descrever TODOS os detalhes visíveis antes de responder
-            if user_message and not user_message.startswith("[Imagem"):
-                caption_text = user_message
-            else:
-                caption_text = (
-                    "Analise esta imagem com TODOS os detalhes: textos visíveis, títulos, "
-                    "cores, objetos, marcas, números, rostos, cenário — qualquer detalhe relevante. "
-                    "Depois responda de forma natural conforme seu papel de atendente."
-                )
-            messages = history + [{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}},
+        """Analisa imagem — GPT-4o Vision (OpenAI) com fallback Claude Sonnet."""
+        data, mime = self._parse_base64(image_base64)
+        mime = mime or "image/jpeg"
+        if user_message and not user_message.startswith("[Imagem"):
+            caption_text = user_message
+        else:
+            caption_text = (
+                "Analise esta imagem com TODOS os detalhes: textos visíveis, títulos, "
+                "cores, objetos, marcas, números, rostos, cenário. "
+                "Depois responda de forma natural conforme seu papel de atendente."
+            )
+
+        # ── GPT-4o Vision ─────────────────────────────────────────────────────
+        if self.openai:
+            try:
+                messages = [{"role": "system", "content": system_prompt}]
+                messages += self._build_openai_history(history)
+                messages.append({"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}},
                     {"type": "text", "text": caption_text}
-                ]
-            }]
+                ]})
+                resp = self.openai.chat.completions.create(
+                    model="gpt-4o", messages=messages, max_tokens=MAX_RESPONSE_TOKENS
+                )
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                logger.error(f"[GPT-4o Vision] erro: {e} — usando Claude como fallback")
+
+        # ── Claude Sonnet fallback ─────────────────────────────────────────────
+        try:
+            msgs = history + [{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}},
+                {"type": "text", "text": caption_text}
+            ]}]
             response = self.claude.messages.create(
                 model=CLAUDE_SONNET, max_tokens=MAX_RESPONSE_TOKENS,
-                system=system_prompt, messages=messages
+                system=system_prompt, messages=msgs
             )
             return response.content[0].text.strip()
         except Exception as e:
-            logger.error(f"Erro ao processar imagem: {e}")
+            logger.error(f"[Claude Vision] erro: {e}")
             return "Recebi sua imagem! Pode me descrever o que você precisa sobre ela?"
 
     async def respond_with_pdf(self, system_prompt: str, history: list, user_message: str, pdf_base64: str) -> str:
-        """Lê e responde sobre um PDF via Claude (suporte nativo a documentos)."""
+        """Lê PDF — GPT-4o (extrai texto) com fallback Claude nativo."""
+        data, _ = self._parse_base64(pdf_base64)
+        doc_question = user_message if user_message and not user_message.startswith("[PDF") and not user_message.startswith("[Documento") else "Resuma o conteúdo deste documento de forma útil."
+
+        # ── GPT-4o + extração de texto ─────────────────────────────────────────
+        if self.openai:
+            try:
+                import pypdf
+                pdf_bytes = b64lib.b64decode(data)
+                reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+                text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+                if text:
+                    messages = [{"role": "system", "content": system_prompt}]
+                    messages += self._build_openai_history(history)
+                    messages.append({"role": "user", "content": f"[Documento PDF]:\n{text[:8000]}\n\n{doc_question}"})
+                    resp = self.openai.chat.completions.create(
+                        model="gpt-4o", messages=messages, max_tokens=MAX_RESPONSE_TOKENS
+                    )
+                    return resp.choices[0].message.content.strip()
+            except Exception as e:
+                logger.error(f"[GPT-4o PDF] erro: {e} — usando Claude como fallback")
+
+        # ── Claude Sonnet fallback (suporte nativo a PDF) ─────────────────────
         try:
-            data, _ = self._parse_base64(pdf_base64)
-            doc_text = user_message if user_message and not user_message.startswith("[PDF") else "Resuma o conteúdo deste documento de forma útil."
-            messages = history + [{
-                "role": "user",
-                "content": [
-                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}},
-                    {"type": "text", "text": doc_text}
-                ]
-            }]
+            msgs = history + [{"role": "user", "content": [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}},
+                {"type": "text", "text": doc_question}
+            ]}]
             response = self.claude.messages.create(
                 model=CLAUDE_SONNET, max_tokens=MAX_RESPONSE_TOKENS,
-                system=system_prompt, messages=messages
+                system=system_prompt, messages=msgs
             )
             return response.content[0].text.strip()
         except Exception as e:
-            logger.error(f"Erro ao processar PDF: {e}")
+            logger.error(f"[Claude PDF] erro: {e}")
             return "Recebi o documento! Pode me dizer o que você quer saber sobre ele?"
 
     async def transcribe_audio(self, audio_base64: str) -> str:
