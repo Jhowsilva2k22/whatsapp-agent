@@ -52,7 +52,7 @@ class WhatsAppService:
             try:
                 response = await client.post(url, json=payload, headers=self.headers)
                 logger.info(f"[Media] status={response.status_code} id={message_id} phone={phone}")
-                if response.status_code == 200:
+                if response.status_code in (200, 201):
                     data = response.json()
                     # Tenta diferentes estruturas de resposta da Evolution API
                     b64 = data.get("base64") or data.get("data", {}).get("base64")
