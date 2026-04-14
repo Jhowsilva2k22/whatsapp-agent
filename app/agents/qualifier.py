@@ -52,7 +52,9 @@ class QualifierAgent:
         media_base64 = None
 
         if media_type in ("image", "audio", "document") and message_id:
-            media_base64 = await self.whatsapp.download_media_base64(message_id)
+            media_base64 = await self.whatsapp.download_media_base64(message_id, phone=phone)
+            if not media_base64:
+                logger.warning(f"[Qualifier] falha ao baixar mídia tipo={media_type} id={message_id}")
 
         if media_type == "audio" and media_base64:
             transcription = await self.ai.transcribe_audio(media_base64)
@@ -60,6 +62,8 @@ class QualifierAgent:
                 display_message = f"[Áudio]: {transcription}"
             media_base64 = None
             media_type = "text"
+        elif media_type == "audio" and not media_base64:
+            display_message = "[Áudio recebido - não foi possível processar]"
         # ────────────────────────────────────────────────────────────────────
 
         classification = await self.ai.classify_intent(display_message, context=customer.summary or "")

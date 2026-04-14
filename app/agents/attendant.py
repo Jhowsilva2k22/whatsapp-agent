@@ -44,7 +44,7 @@ class AttendantAgent:
         media_base64 = None
 
         if media_type in ("image", "audio", "document") and message_id:
-            media_base64 = await self.whatsapp.download_media_base64(message_id)
+            media_base64 = await self.whatsapp.download_media_base64(message_id, phone=phone)
 
         if media_type == "audio" and media_base64:
             transcription = await self.ai.transcribe_audio(media_base64)

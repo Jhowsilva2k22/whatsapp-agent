@@ -39,17 +39,31 @@ class WhatsAppService:
             except Exception:
                 pass
 
-    async def download_media_base64(self, message_id: str) -> str | None:
+    async def download_media_base64(self, message_id: str, phone: str = "") -> str | None:
         """Baixa mídia de uma mensagem via Evolution API e retorna base64."""
         url = f"{self.base_url}/chat/getBase64FromMediaMessage/{self.settings.evolution_instance}"
-        payload = {"message": {"key": {"id": message_id}}, "convertToMp4": False}
+        # Monta key completa — Evolution API v2 precisa de remoteJid + fromMe + id
+        key: dict = {"id": message_id, "fromMe": False}
+        if phone:
+            raw = phone.replace("+", "").replace("-", "").replace(" ", "").replace("@s.whatsapp.net", "")
+            key["remoteJid"] = f"{raw}@s.whatsapp.net"
+        payload = {"message": {"key": key}, "convertToMp4": False}
         async with httpx.AsyncClient(timeout=30) as client:
             try:
                 response = await client.post(url, json=payload, headers=self.headers)
+                logger.info(f"[Media] status={response.status_code} id={message_id} phone={phone}")
                 if response.status_code == 200:
-                    return response.json().get("base64")
+                    data = response.json()
+                    # Tenta diferentes estruturas de resposta da Evolution API
+                    b64 = data.get("base64") or data.get("data", {}).get("base64")
+                    if b64:
+                        logger.info(f"[Media] download OK id={message_id} bytes={len(b64)}")
+                        return b64
+                    logger.warning(f"[Media] base64 ausente na resposta: {list(data.keys())}")
+                else:
+                    logger.error(f"[Media] erro HTTP {response.status_code}: {response.text[:300]}")
             except Exception as e:
-                logger.error(f"Erro ao baixar mídia {message_id}: {e}")
+                logger.error(f"[Media] exceção ao baixar mídia {message_id}: {e}")
         return None
 
     def parse_webhook(self, payload: dict):
