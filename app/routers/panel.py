@@ -50,7 +50,7 @@ async def get_stats(token: str = Query(...), owner_id: str = Query("")):
         from datetime import datetime
         today = datetime.utcnow().date().isoformat()
 
-        q = db.table("customers").select("lead_status,channel,lead_score,last_contact")
+        q = db.table("customers").select("lead_status,channel,lead_score,last_contact,last_sentiment,sentiment_history")
         if owner_id:
             q = q.eq("owner_id", owner_id)
         result = q.execute()
@@ -60,6 +60,7 @@ async def get_stats(token: str = Query(...), owner_id: str = Query("")):
         today_leads = sum(1 for l in leads if (str(l.get("last_contact") or ""))[:10] == today)
         hot = sum(1 for l in leads if (l.get("lead_score") or 0) >= 70)
         human = sum(1 for l in leads if l.get("lead_status") == "em_atendimento_humano")
+        clientes = sum(1 for l in leads if l.get("lead_status") == "cliente")
 
         channel_counts = {}
         for l in leads:
@@ -72,16 +73,27 @@ async def get_stats(token: str = Query(...), owner_id: str = Query("")):
             key=lambda x: x["total"], reverse=True
         )
 
+        # Sentimento agregado
+        sentiments = {"positivo": 0, "neutro": 0, "negativo": 0, "frustrado": 0, "entusiasmado": 0}
+        for l in leads:
+            s = l.get("last_sentiment")
+            if s and s in sentiments:
+                sentiments[s] += 1
+        total_sent = sum(sentiments.values()) or 1
+        sentiment_stats = {k: {"total": v, "pct": round(v / total_sent * 100)} for k, v in sentiments.items() if v > 0}
+
         return {
             "total": total,
             "hoje": today_leads,
             "quentes": hot,
             "em_atendimento": human,
-            "canais": channel_stats
+            "clientes": clientes,
+            "canais": channel_stats,
+            "sentimento": sentiment_stats,
         }
     except Exception as e:
         logger.error(f"[Panel Stats] erro: {e}")
-        return {"total": 0, "hoje": 0, "quentes": 0, "em_atendimento": 0, "canais": []}
+        return {"total": 0, "hoje": 0, "quentes": 0, "em_atendimento": 0, "clientes": 0, "canais": [], "sentimento": {}}
 
 
 @router.get("/panel/lead/{phone}/messages")
@@ -190,6 +202,20 @@ def _build_html(token: str) -> str:
   .badge.cliente {{ background: #2a1e10; color: #ffb74d; }}
   .intent {{ font-size: 11px; color: #666; }}
   .ch {{ font-size: 11px; color: #888; }}
+  .sentiment {{ font-size: 11px; font-weight: 600; }}
+  .sentiment.positivo {{ color: #66bb6a; }}
+  .sentiment.entusiasmado {{ color: #81c784; }}
+  .sentiment.neutro {{ color: #888; }}
+  .sentiment.negativo {{ color: #ef5350; }}
+  .sentiment.frustrado {{ color: #ff7043; }}
+  .badge.perdido {{ background: #2a1a1a; color: #ef5350; }}
+  .sentiment-bar {{ display: flex; gap: 8px; padding: 12px 24px 0; flex-wrap: wrap; }}
+  .sent-chip {{ display: flex; align-items: center; gap: 4px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 20px; padding: 4px 12px; font-size: 12px; }}
+  .sent-dot {{ width: 8px; height: 8px; border-radius: 50%; }}
+  .sent-dot.positivo,.sent-dot.entusiasmado {{ background: #66bb6a; }}
+  .sent-dot.neutro {{ background: #888; }}
+  .sent-dot.negativo {{ background: #ef5350; }}
+  .sent-dot.frustrado {{ background: #ff7043; }}
   .summary {{ font-size: 12px; color: #555; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
   .date {{ font-size: 11px; color: #555; }}
   .table-wrap {{ overflow-x: auto; padding: 0 24px 24px; }}
@@ -231,9 +257,11 @@ def _build_html(token: str) -> str:
   <div class="stat today"><div class="val" id="s-hoje">—</div><div class="lbl">Contatos hoje</div></div>
   <div class="stat hot"><div class="val" id="s-hot">—</div><div class="lbl">Leads quentes</div></div>
   <div class="stat human"><div class="val" id="s-human">—</div><div class="lbl">Em atendimento</div></div>
+  <div class="stat" style="border-left: 3px solid #ffb74d"><div class="val" id="s-clientes" style="color:#ffb74d">—</div><div class="lbl">Clientes</div></div>
 </div>
 
 <div class="channels" id="channels-row"></div>
+<div class="sentiment-bar" id="sentiment-row"></div>
 
 <div class="toolbar">
   <input type="text" id="search" placeholder="Buscar por nome ou número..." oninput="filterLeads()">
@@ -265,6 +293,7 @@ def _build_html(token: str) -> str:
         <th>Contato</th>
         <th onclick="sortBy('lead_score')">Score ↕</th>
         <th>Status</th>
+        <th>Sentimento</th>
         <th>Canal</th>
         <th>Intenção</th>
         <th onclick="sortBy('total_messages')">Msgs ↕</th>
@@ -307,9 +336,17 @@ async function loadStats() {{
   document.getElementById('s-hoje').textContent = d.hoje;
   document.getElementById('s-hot').textContent = d.quentes;
   document.getElementById('s-human').textContent = d.em_atendimento;
+  document.getElementById('s-clientes').textContent = d.clientes || 0;
   const ch = document.getElementById('channels-row');
   ch.innerHTML = d.canais.slice(0,6).map(c =>
     `<div class="ch-tag"><span>${{c.canal}}</span> ${{c.pct}}% (${{c.total}})</div>`
+  ).join('');
+  // Sentimento
+  const sr = document.getElementById('sentiment-row');
+  const sent = d.sentimento || {{}};
+  const sentLabels = {{positivo:'Positivo',entusiasmado:'Entusiasmado',neutro:'Neutro',negativo:'Negativo',frustrado:'Frustrado'}};
+  sr.innerHTML = Object.keys(sent).map(k =>
+    `<div class="sent-chip"><span class="sent-dot ${{k}}"></span><span style="color:#aaa">${{sentLabels[k]||k}}</span> <span style="color:#fff;font-weight:600">${{sent[k].pct}}%</span></div>`
   ).join('');
 }}
 
@@ -350,6 +387,11 @@ function scoreClass(s) {{
   return 'cold';
 }}
 
+function sentimentIcon(s) {{
+  const map = {{positivo:'Positivo',entusiasmado:'Entusiasmado',neutro:'Neutro',negativo:'Negativo',frustrado:'Frustrado'}};
+  return map[s] || '—';
+}}
+
 function fmtDate(d) {{
   if (!d) return '—';
   const dt = new Date(d);
@@ -369,6 +411,7 @@ function renderLeads(leads) {{
       <td class="phone"><a href="https://wa.me/${{(l.phone||'').replace(/[^0-9]/g,'')}}" target="_blank" onclick="event.stopPropagation()">${{l.phone}}</a></td>
       <td><span class="score ${{scoreClass(l.lead_score||0)}}">${{l.lead_score||0}}</span></td>
       <td><span class="badge ${{l.lead_status||'novo'}}">${{l.lead_status||'novo'}}</span></td>
+      <td><span class="sentiment ${{l.last_sentiment||'neutro'}}">${{sentimentIcon(l.last_sentiment)}}</span></td>
       <td class="ch">${{l.channel||'—'}}</td>
       <td class="intent">${{l.last_intent||'—'}}</td>
       <td style="color:#666">${{l.total_messages||0}}</td>
@@ -408,6 +451,8 @@ async function openLead(phone, ownerId) {{
       <div class="lead-card"><div class="lc-label">Status</div><div class="lc-val"><span class="badge ${{lead.lead_status||'novo'}}">${{lead.lead_status||'novo'}}</span></div></div>
       <div class="lead-card"><div class="lc-label">Mensagens</div><div class="lc-val">${{lead.total_messages||0}}</div></div>
       <div class="lead-card"><div class="lc-label">Último contato</div><div class="lc-val" style="font-size:12px">${{fmtDate(lead.last_contact)}}</div></div>
+      <div class="lead-card"><div class="lc-label">Sentimento</div><div class="lc-val sentiment ${{lead.last_sentiment||'neutro'}}">${{sentimentIcon(lead.last_sentiment)}}</div></div>
+      <div class="lead-card"><div class="lc-label">Histórico</div><div class="lc-val" style="font-size:11px">${{(lead.sentiment_history||[]).slice(-5).map(s=>`<span class="sentiment ${{s}}" style="margin-right:4px">${{sentimentIcon(s)}}</span>`).join(' → ')||'—'}}</div></div>
     </div>`;
   document.getElementById('m-summary').innerHTML = formatSummary(lead.summary);
   document.getElementById('m-messages').innerHTML = '<em style="color:#444;font-size:12px">Carregando...</em>';
