@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from app.routers import webhook, onboarding, panel, instagram_webhook
 from app.config import get_settings
 import logging
@@ -63,6 +64,37 @@ async def startup():
     # Renova subscription do webhook Instagram automaticamente
     if settings.meta_page_id and settings.meta_page_token:
         await _subscribe_instagram_webhook()
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    return """<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Politica de Privacidade - Joanderson Ecosistema</title>
+<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#333;line-height:1.6}h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:1.5rem}</style></head>
+<body>
+<h1>Politica de Privacidade</h1>
+<p><strong>Ultima atualizacao:</strong> 15 de abril de 2026</p>
+<p>O aplicativo <strong>Joanderson Ecosistema</strong> respeita a sua privacidade. Esta politica descreve como coletamos, usamos e protegemos suas informacoes.</p>
+
+<h2>1. Dados coletados</h2>
+<p>Coletamos apenas os dados necessarios para o funcionamento do servico de atendimento automatizado via Instagram e WhatsApp: nome de usuario, identificador de conversa e conteudo das mensagens trocadas com nosso assistente.</p>
+
+<h2>2. Uso dos dados</h2>
+<p>Os dados sao utilizados exclusivamente para: responder suas mensagens de forma automatizada, melhorar a qualidade do atendimento e entrar em contato quando solicitado.</p>
+
+<h2>3. Compartilhamento</h2>
+<p>Nao vendemos, alugamos ou compartilhamos seus dados pessoais com terceiros, exceto quando exigido por lei.</p>
+
+<h2>4. Armazenamento e seguranca</h2>
+<p>Seus dados sao armazenados em servidores seguros com criptografia. Mantemos os dados apenas pelo tempo necessario para a prestacao do servico.</p>
+
+<h2>5. Seus direitos</h2>
+<p>Voce pode solicitar a exclusao dos seus dados a qualquer momento entrando em contato pelo e-mail: <a href="mailto:joanderson5@gmail.com">joanderson5@gmail.com</a>.</p>
+
+<h2>6. Contato</h2>
+<p>Para duvidas sobre esta politica, entre em contato: <a href="mailto:joanderson5@gmail.com">joanderson5@gmail.com</a></p>
+</body></html>"""
 
 
 @app.get("/api/migrate")
