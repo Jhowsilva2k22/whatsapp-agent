@@ -36,8 +36,8 @@ async def ig_check():
     mem = MemoryService()
     owners = []
     try:
-        result = mem.db.table("owners").select("id,instagram_account_id,agent_mode").execute()
-        owners = [{"id": o["id"], "ig_id": o.get("instagram_account_id"), "mode": o.get("agent_mode")} for o in (result.data or [])]
+        result = mem.db.table("owners").select("*").limit(1).execute()
+        owners = list((result.data[0] if result.data else {}).keys()) if result.data else ["NO_OWNERS"]
     except Exception as e:
         owners = [{"error": str(e)}]
     return {
