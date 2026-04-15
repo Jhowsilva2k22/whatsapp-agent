@@ -34,7 +34,7 @@ class AIService:
 
     async def _respond_claude(self, system_prompt: str, history: list, user_message: str) -> str:
         messages = history + [{"role": "user", "content": user_message}]
-        response = self.claude.messages.create(model=CLAUDE_HAIKU, max_tokens=MAX_RESPONSE_TOKENS, system=system_prompt, messages=messages)
+        response = self.claude.messages.create(model=CLAUDE_SONNET, max_tokens=MAX_RESPONSE_TOKENS, system=system_prompt, messages=messages)
         return response.content[0].text.strip()
 
     async def _respond_gemini(self, system_prompt: str, history: list, user_message: str) -> str:
