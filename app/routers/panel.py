@@ -38,7 +38,7 @@ async def get_leads(
     leads = result.data or []
     if search:
         s = search.lower()
-        leads = [l for l in leads if s in (l.get("name") or "").lower() or s in (l.get("phone") or "")]
+        leads = [l for l in leads if s in (l.get("name") or "").lower() or s in (l.get("phone") or "") or s in (l.get("summary") or "").lower()]
     return leads
 
 
@@ -46,40 +46,42 @@ async def get_leads(
 async def get_stats(token: str = Query(...), owner_id: str = Query("")):
     _check_token(token)
     db = memory.db
-    from datetime import datetime, timedelta
-    today = datetime.utcnow().date().isoformat()
-    yesterday = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    try:
+        from datetime import datetime
+        today = datetime.utcnow().date().isoformat()
 
-    q = db.table("customers").select("lead_status,channel,lead_score,last_contact,created_at")
-    if owner_id:
-        q = q.eq("owner_id", owner_id)
-    result = q.execute()
-    leads = result.data or []
+        q = db.table("customers").select("lead_status,channel,lead_score,last_contact")
+        if owner_id:
+            q = q.eq("owner_id", owner_id)
+        result = q.execute()
+        leads = result.data or []
 
-    total = len(leads)
-    today_leads = sum(1 for l in leads if (l.get("last_contact") or "")[:10] == today)
-    hot = sum(1 for l in leads if (l.get("lead_score") or 0) >= 70)
-    human = sum(1 for l in leads if l.get("lead_status") == "em_atendimento_humano")
+        total = len(leads)
+        today_leads = sum(1 for l in leads if (str(l.get("last_contact") or ""))[:10] == today)
+        hot = sum(1 for l in leads if (l.get("lead_score") or 0) >= 70)
+        human = sum(1 for l in leads if l.get("lead_status") == "em_atendimento_humano")
 
-    # Stats por canal
-    channel_counts = {}
-    for l in leads:
-        c = l.get("channel") or "desconhecido"
-        channel_counts[c] = channel_counts.get(c, 0) + 1
+        channel_counts = {}
+        for l in leads:
+            c = l.get("channel") or "não identificado"
+            channel_counts[c] = channel_counts.get(c, 0) + 1
 
-    channel_stats = sorted(
-        [{"canal": k, "total": v, "pct": round(v / total * 100) if total else 0}
-         for k, v in channel_counts.items()],
-        key=lambda x: x["total"], reverse=True
-    )
+        channel_stats = sorted(
+            [{"canal": k, "total": v, "pct": round(v / total * 100) if total else 0}
+             for k, v in channel_counts.items()],
+            key=lambda x: x["total"], reverse=True
+        )
 
-    return {
-        "total": total,
-        "hoje": today_leads,
-        "quentes": hot,
-        "em_atendimento": human,
-        "canais": channel_stats
-    }
+        return {
+            "total": total,
+            "hoje": today_leads,
+            "quentes": hot,
+            "em_atendimento": human,
+            "canais": channel_stats
+        }
+    except Exception as e:
+        logger.error(f"[Panel Stats] erro: {e}")
+        return {"total": 0, "hoje": 0, "quentes": 0, "em_atendimento": 0, "canais": []}
 
 
 @router.get("/panel/lead/{phone}/messages")
