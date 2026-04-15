@@ -148,12 +148,15 @@ async def receive_instagram(request: Request):
 
 async def _get_owner_by_instagram(instance: str):
     """Busca owner pelo instagram_account_id."""
-    db = MemoryService().db
-    # instance vem como "ig_17841462631956604"
-    ig_id = instance.replace("ig_", "") if instance.startswith("ig_") else instance
-    result = db.table("owners").select("*").eq("instagram_account_id", ig_id).maybe_single().execute()
-    if result and result.data:
-        return result.data
+    try:
+        db = MemoryService().db
+        # instance vem como "ig_17841462631956604"
+        ig_id = instance.replace("ig_", "") if instance.startswith("ig_") else instance
+        result = db.table("owners").select("*").eq("instagram_account_id", ig_id).maybe_single().execute()
+        if result and result.data:
+            return result.data
+    except Exception as e:
+        logger.warning(f"[IG Webhook] Erro ao buscar owner por instagram_account_id: {e}")
     return None
 
 
