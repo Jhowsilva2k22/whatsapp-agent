@@ -2,6 +2,7 @@ from app.services.ai import AIService
 from app.services.memory import MemoryService
 from app.services.whatsapp import WhatsAppService
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 HANDOFF_SCORE = 70
@@ -142,6 +143,28 @@ class QualifierAgent:
             display_message = "[Áudio recebido - não foi possível processar]"
         # ────────────────────────────────────────────────────────────────────
 
+        # ── Follow-up automático ao retomar (dia seguinte após handoff humano) ─
+        if customer.lead_status == "qualificando" and customer.total_messages and customer.total_messages > 3:
+            # Verifica se havia estado em atendimento humano antes (summary contém nota de handoff)
+            if customer.summary and "Nota " in (customer.summary or ""):
+                follow_up_system = build_qualifier_prompt(owner=owner, customer=customer.model_dump(), history_summary=customer.summary or "")
+                follow_up_instruction = (
+                    "O lead acabou de voltar após ter sido atendido pessoalmente. "
+                    "Envie UMA mensagem curta e natural perguntando como foi, se conseguiu resolver "
+                    "o que precisava, se ficou alguma dúvida. Não mencione que é bot. "
+                    "Seja genuíno e humano."
+                )
+                follow_up = await self.ai.respond(
+                    system_prompt=follow_up_system,
+                    history=[],
+                    user_message=follow_up_instruction,
+                    use_gemini=False
+                )
+                await self.whatsapp.send_typing(phone, duration=len(follow_up) * 40)
+                await self.whatsapp.send_message(phone, follow_up)
+                await self.memory.save_turn(phone, owner_id, "assistant", follow_up)
+                return
+
         # ── Captura de nome (primeira mensagem curta sem nome salvo) ─────────
         if not customer.name:
             detected_name = await self.memory.detect_and_save_name(phone, owner_id, display_message)
@@ -188,6 +211,25 @@ class QualifierAgent:
         notify_phone = owner.get("notify_phone")
         if not notify_phone:
             return
-        customer_name = customer.name or phone
-        alert = f"*Lead Quente!*\n\n{customer_name} ({phone})\nScore: {customer.lead_score}/100\nUltima mensagem: {message}\n\nAcesse o painel para ver o historico."
+
+        clean_phone = re.sub(r'\D', '', phone)
+        wa_link = f"wa.me/{clean_phone}"
+        name = customer.name or "Sem nome"
+        score = customer.lead_score or 0
+        channel = customer.channel or "não identificado"
+        summary = (customer.summary or "sem histórico")[:300]
+        total = customer.total_messages or 0
+
+        alert = (
+            f"🔥 *Lead Quente — hora de assumir!*\n\n"
+            f"👤 *{name}*\n"
+            f"📱 {wa_link}\n"
+            f"📊 Score: {score}/100\n"
+            f"📍 Canal de origem: {channel}\n"
+            f"💬 Mensagens trocadas: {total}\n"
+            f"📝 Histórico: {summary}\n\n"
+            f"💬 *Última mensagem:*\n_{message}_\n\n"
+            f"Para assumir o atendimento, responda:\n"
+            f"*assumir {clean_phone}*"
+        )
         await self.whatsapp.send_message(notify_phone, alert)
