@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.services.whatsapp import WhatsAppService
 from app.services.memory import MemoryService
-from app.queues.tasks import process_message, process_buffered, learn_from_links, celery_app
+from app.queues.tasks import process_message, process_buffered, learn_from_links, follow_up_active, celery_app
 from app.config import get_settings
 import logging
 import re
@@ -143,6 +143,33 @@ async def receive_whatsapp(request: Request):
                 logger.info(f"[Webhook] Ignorado — lead {message.phone} em atendimento humano")
                 return {"status": "in_human_handoff"}
 
+    # ── Tracking de follow-up: marca timestamp + reseta estágio frio ────────
+    if sender_phone != owner_phone:
+        import time as _time
+        ts_key = f"last_lead_msg:{message.phone}:{owner['id']}"
+        fu_key = f"followup_sent:{message.phone}:{owner['id']}"
+        fu_task_key = f"followup_task:{message.phone}:{owner['id']}"
+        try:
+            _redis.set(ts_key, str(_time.time()))
+            _redis.expire(ts_key, 1800)  # TTL 30min
+            _redis.delete(fu_key)  # reseta follow-up ativo ao receber msg
+
+            # Reseta follow_up_stage se lead voltou a responder
+            # (cold leads que responderam voltam pro fluxo normal)
+            if hasattr(customer, 'follow_up_stage') and (customer.follow_up_stage or 0) > 0:
+                await memory.update_customer(
+                    message.phone, owner["id"],
+                    {"follow_up_stage": 0}
+                )
+
+            # Revoga follow-up ativo anterior (se existir)
+            old_fu = _redis.get(fu_task_key)
+            if old_fu:
+                celery_app.control.revoke(old_fu, terminate=False)
+                _redis.delete(fu_task_key)
+        except Exception as e:
+            logger.warning(f"[Webhook] Follow-up tracking falhou (continuando): {e}")
+
     # ── Rate limiting: agrupa mensagens rápidas ────────────────────────────
     buffer_key = f"buffer:{message.phone}:{owner['id']}"
     task_key = f"buffer_task:{message.phone}:{owner['id']}"
@@ -169,6 +196,17 @@ async def receive_whatsapp(request: Request):
             queue="messages"
         )
         _redis.setex(task_key, 30, result.id)
+
+        # ── Agenda follow-up ativo (5 min) para leads ──────────────────────
+        if sender_phone != owner_phone:
+            fu_task_key = f"followup_task:{message.phone}:{owner['id']}"
+            fu_result = follow_up_active.apply_async(
+                args=[message.phone, owner["id"], 1],
+                countdown=300,  # 5 minutos
+                queue="messages"
+            )
+            _redis.setex(fu_task_key, 600, fu_result.id)
+
     except Exception as e:
         logger.warning(f"[Webhook] Buffer falhou, processando direto: {e}")
         process_message.apply_async(

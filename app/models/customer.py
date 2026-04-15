@@ -20,3 +20,4 @@ class CustomerProfile(BaseModel):
     total_messages: int = 0
     owner_id: str = ""
     channel: Optional[str] = None
+    follow_up_stage: int = 0
