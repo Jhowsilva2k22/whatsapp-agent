@@ -45,7 +45,10 @@ class AIService:
 
     async def classify_intent(self, message: str, context: str = "") -> dict:
         prompt = f"""Analise esta mensagem de WhatsApp e retorne um JSON com:
-- intent: compra | suporte | agendamento | informacao | objecao | cancelamento | outros
+- intent: compra | compra_confirmada | suporte | agendamento | informacao | objecao | cancelamento | outros
+  IMPORTANTE: "compra" = quer comprar, demonstra interesse, pergunta preço
+  "compra_confirmada" = JÁ comprou, já pagou, fez pix, fechou negócio, confirmou pagamento
+  Exemplos de compra_confirmada: "já paguei", "fiz o pix", "tá pago", "comprei", "fechado", "pode enviar", "já fiz o pagamento", "transferi"
 - lead_score_delta: numero de -10 a +20
 - is_simple: true se for mensagem simples (oi, obrigado, ok)
 - urgency: alta | media | baixa

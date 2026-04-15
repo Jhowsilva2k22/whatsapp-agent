@@ -212,8 +212,15 @@ class QualifierAgent:
         from app.agents.attendant import _auto_status
         new_status = _auto_status(customer.lead_status, new_score)
 
+        # ── Detecção automática de venda confirmada ─────────────────────
+        if intent == "compra_confirmada" and new_status != "cliente":
+            new_status = "cliente"
+            new_score = 100
+            await self._notify_sale(phone, owner, customer)
+            logger.info(f"[Qualifier] VENDA DETECTADA! {phone} virou cliente automaticamente")
+
         handoff_threshold = owner.get("handoff_threshold", HANDOFF_SCORE)
-        if new_score >= handoff_threshold and customer.lead_score < handoff_threshold:
+        if new_score >= handoff_threshold and customer.lead_score < handoff_threshold and new_status != "cliente":
             await self._trigger_handoff(phone, owner, customer, display_message)
         await self.memory.save_turn(phone, owner_id, "user", display_message)
         system_prompt = build_qualifier_prompt(owner=owner, customer=customer.model_dump(), history_summary=customer.summary or "")
@@ -269,5 +276,28 @@ class QualifierAgent:
             f"💬 *Última mensagem:*\n_{message}_\n\n"
             f"Para assumir o atendimento, responda:\n"
             f"*assumir {clean_phone}*"
+        )
+        await self.whatsapp.send_message(notify_phone, alert)
+
+    async def _notify_sale(self, phone: str, owner: dict, customer):
+        """Notifica o dono quando uma venda é detectada automaticamente."""
+        notify_phone = owner.get("notify_phone")
+        if not notify_phone:
+            return
+
+        clean_phone = re.sub(r'\D', '', phone)
+        wa_link = f"wa.me/{clean_phone}"
+        name = customer.name or "Sem nome"
+        channel = customer.channel or "não identificado"
+        total = customer.total_messages or 0
+
+        alert = (
+            f"💰 *Venda Detectada!*\n\n"
+            f"👤 *{name}*\n"
+            f"📱 {wa_link}\n"
+            f"📍 Canal: {channel}\n"
+            f"💬 Mensagens: {total}\n\n"
+            f"Status atualizado automaticamente pra *cliente*.\n"
+            f"O agente agora cuida do pós-venda e relacionamento."
         )
         await self.whatsapp.send_message(notify_phone, alert)

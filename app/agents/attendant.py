@@ -136,6 +136,26 @@ class AttendantAgent:
         # ── Progressão automática de status baseada no score ────────────
         new_status = _auto_status(customer.lead_status, new_score)
 
+        # ── Detecção automática de venda confirmada ─────────────────────
+        if intent == "compra_confirmada" and new_status != "cliente":
+            new_status = "cliente"
+            new_score = 100
+            # Notifica o dono
+            notify_phone = owner.get("notify_phone")
+            if notify_phone:
+                clean_phone = re.sub(r'\D', '', phone)
+                name = customer.name or "Sem nome"
+                channel = customer.channel or "não identificado"
+                alert = (
+                    f"💰 *Venda Detectada!*\n\n"
+                    f"👤 *{name}*\n"
+                    f"📱 wa.me/{clean_phone}\n"
+                    f"📍 Canal: {channel}\n\n"
+                    f"Status atualizado pra *cliente* automaticamente."
+                )
+                await self.whatsapp.send_message(notify_phone, alert)
+            logger.info(f"[Attendant] VENDA DETECTADA! {phone} virou cliente automaticamente")
+
         await self.memory.save_turn(phone, owner_id, "user", display_message)
         system_prompt = build_attendant_prompt(owner=owner, customer=customer.model_dump(), history_summary=customer.summary or "")
 
