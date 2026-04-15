@@ -47,7 +47,8 @@ def process_message(self, phone: str, owner_id: str, message: str, agent_mode: s
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, queue="messages")
 def process_buffered(self, phone: str, owner_id: str, agent_mode: str):
-    """Processa mensagens agrupadas do buffer Redis (rate limiting)."""
+    """Processa mensagens agrupadas do buffer Redis (rate limiting).
+    Mídias são pré-processadas individualmente, textos são agrupados."""
     import json as _json
     import redis
 
@@ -65,23 +66,45 @@ def process_buffered(self, phone: str, owner_id: str, agent_mode: str):
             logger.info(f"[Buffer] Nenhuma mensagem no buffer para {phone}")
             return
 
-        # Decodifica mensagens
         msgs = [_json.loads(m) for m in raw_msgs]
         logger.info(f"[Buffer] Processando {len(msgs)} mensagem(ns) agrupadas de {phone}")
 
-        # Junta textos em uma mensagem só, preserva o media_type da última
-        texts = [m["text"] for m in msgs if m["text"]]
-        combined_text = "\n".join(texts) if texts else ""
-        last_msg = msgs[-1]
-        media_type = last_msg.get("media_type", "text")
-        message_id = last_msg.get("message_id", "")
+        # Separa mídias e textos
+        media_msgs = [m for m in msgs if m.get("media_type", "text") != "text" and m.get("message_id")]
+        text_parts = [m["text"] for m in msgs if m.get("text")]
 
-        if not combined_text:
-            logger.info(f"[Buffer] Mensagens vazias de {phone}, ignorando")
-            return
+        # Se tem mídias, processa cada uma individualmente via agente
+        if media_msgs:
+            # Se tem só mídias (sem texto adicional), processa cada uma
+            # Se tem mídias + texto, processa mídias primeiro e texto junto com a última
+            for i, media in enumerate(media_msgs):
+                is_last_media = (i == len(media_msgs) - 1)
+                # Última mídia carrega o texto combinado junto
+                if is_last_media and text_parts:
+                    msg_text = "\n".join(text_parts)
+                else:
+                    msg_text = media.get("text", "") or ""
 
-        kwargs = {"message_id": message_id, "media_type": media_type}
-        _dispatch_to_agent(phone, owner_id, combined_text, agent_mode, **kwargs)
+                if not msg_text and media.get("media_type") == "image":
+                    msg_text = "[Imagem enviada]"
+                elif not msg_text and media.get("media_type") == "audio":
+                    msg_text = "[Áudio enviado]"
+                elif not msg_text and media.get("media_type") == "document":
+                    msg_text = "[Documento enviado]"
+
+                kwargs = {
+                    "message_id": media.get("message_id", ""),
+                    "media_type": media.get("media_type", "text")
+                }
+                _dispatch_to_agent(phone, owner_id, msg_text, agent_mode, **kwargs)
+        else:
+            # Só textos — junta tudo e processa como antes
+            combined_text = "\n".join(text_parts) if text_parts else ""
+            if not combined_text:
+                logger.info(f"[Buffer] Mensagens vazias de {phone}, ignorando")
+                return
+            kwargs = {"message_id": msgs[-1].get("message_id", ""), "media_type": "text"}
+            _dispatch_to_agent(phone, owner_id, combined_text, agent_mode, **kwargs)
 
     except Exception as exc:
         logger.error(f"[Buffer] Erro ao processar buffer de {phone}: {exc}")
