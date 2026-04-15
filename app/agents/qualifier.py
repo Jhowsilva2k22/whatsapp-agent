@@ -243,8 +243,8 @@ class QualifierAgent:
                 if customer.summary:
                     sos_alert += f"📝 Contexto: {customer.summary[:200]}\n\n"
                 sos_alert += (
-                    f"👉 Pra assumir, mande:\n"
-                    f"/assumir {phone}"
+                    f"👉 Copie e envie pra assumir:\n\n"
+                    f"```/assumir {phone}```"
                 )
                 await self.whatsapp.send_message(notify_phone, sos_alert)
                 sos_sent = True
@@ -321,8 +321,8 @@ class QualifierAgent:
             f"💬 Mensagens trocadas: {total}\n"
             f"📝 Histórico: {summary}\n\n"
             f"💬 *Última mensagem:*\n_{message}_\n\n"
-            f"👉 Pra assumir, mande:\n"
-            f"/assumir {phone}"
+            f"👉 Copie e envie pra assumir:\n\n"
+            f"```/assumir {phone}```"
         )
         await self.whatsapp.send_message(notify_phone, alert)
 
