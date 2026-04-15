@@ -117,6 +117,16 @@ async def receive_whatsapp(request: Request):
                     )
                 return {"status": "welcome_updated"}
 
+        # STATS: resumo rápido do dia
+        if msg_lower in ("stats", "status", "resumo", "relatorio", "relatório"):
+            try:
+                stats_msg = await _build_owner_stats(owner["id"])
+                await whatsapp.send_message(message.phone, stats_msg)
+            except Exception as e:
+                logger.error(f"[Webhook] Erro ao gerar stats: {e}")
+                await whatsapp.send_message(message.phone, "⚠️ Erro ao gerar relatório.")
+            return {"status": "stats_sent"}
+
     # ── Bloqueia bot se lead está em atendimento humano ──────────────────────
     if sender_phone != owner_phone:
         customer = await memory.get_or_create_customer(message.phone, owner["id"])
@@ -228,6 +238,62 @@ async def _save_owner_note(lead_phone: str, owner: dict, note: str):
     timestamp = datetime.utcnow().strftime("%d/%m")
     new_summary = f"{existing}\n[Nota {timestamp}]: {note}".strip()
     await memory.update_customer(lead_phone, owner_id, {"summary": new_summary})
+
+
+async def _build_owner_stats(owner_id: str) -> str:
+    """Gera resumo diário do dono: leads, scores, canais, destaques."""
+    from datetime import datetime
+    db = memory.db
+    today = datetime.utcnow().date().isoformat()
+
+    result = db.table("customers").select("name,phone,lead_score,lead_status,channel,total_messages,last_contact").eq("owner_id", owner_id).execute()
+    leads = result.data or []
+    total = len(leads)
+    today_leads = [l for l in leads if (str(l.get("last_contact") or ""))[:10] == today]
+    hot = [l for l in leads if (l.get("lead_score") or 0) >= 70]
+    human = [l for l in leads if l.get("lead_status") == "em_atendimento_humano"]
+
+    # Top 3 leads por score
+    top = sorted(leads, key=lambda x: x.get("lead_score") or 0, reverse=True)[:3]
+    top_text = ""
+    for i, l in enumerate(top, 1):
+        name = l.get("name") or l.get("phone", "?")
+        score = l.get("lead_score") or 0
+        top_text += f"  {i}. {name} — {score} pts\n"
+
+    # Canais
+    channels = {}
+    for l in leads:
+        c = l.get("channel") or "não identificado"
+        channels[c] = channels.get(c, 0) + 1
+    ch_text = ", ".join(f"{k} ({v})" for k, v in sorted(channels.items(), key=lambda x: x[1], reverse=True)[:5])
+
+    msg = (
+        f"📊 *Resumo do dia*\n\n"
+        f"👥 Total de leads: *{total}*\n"
+        f"🆕 Contatos hoje: *{len(today_leads)}*\n"
+        f"🔥 Leads quentes (70+): *{len(hot)}*\n"
+        f"🤝 Em atendimento humano: *{len(human)}*\n\n"
+    )
+
+    if top_text:
+        msg += f"🏆 *Top leads:*\n{top_text}\n"
+
+    if ch_text:
+        msg += f"📍 *Canais:* {ch_text}\n\n"
+
+    # Leads ativos hoje
+    if today_leads:
+        msg += f"💬 *Ativos hoje:*\n"
+        for l in today_leads[:5]:
+            name = l.get("name") or l.get("phone", "?")
+            msgs = l.get("total_messages") or 0
+            msg += f"  • {name} — {msgs} msgs\n"
+
+    if not leads:
+        msg = "📊 Nenhum lead registrado ainda."
+
+    return msg
 
 
 async def _build_lead_report(customer, phone: str) -> str:
