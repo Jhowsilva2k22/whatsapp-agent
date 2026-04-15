@@ -21,3 +21,6 @@ class CustomerProfile(BaseModel):
     owner_id: str = ""
     channel: Optional[str] = None
     follow_up_stage: int = 0
+    birthday: Optional[str] = None          # formato "DD/MM" ou "DD/MM/AAAA"
+    nurture_paused: bool = False             # True = cliente pediu pra parar msgs
+    last_nurture: Optional[datetime] = None  # última msg de nurturing enviada

@@ -3,6 +3,7 @@ from app.services.memory import MemoryService
 from app.services.whatsapp import WhatsAppService
 from app.agents.qualifier import _detect_channel
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ CLAREZA ACIMA DE TUDO: Respostas simples e diretas resolvem mais e geram menos a
 
 PROFISSIONALISMO COM CALOR: Você pode ser humano e próximo sem perder o fio do atendimento. Cuidado e profissionalismo não se excluem — se complementam.
 
+OPT-OUT COM DIGNIDADE: Se o cliente pedir para parar de receber mensagens, não insista. Peça desculpas com educação e calor — "desculpa qualquer incômodo, de verdade", despeça-se humanamente e deixe claro que quando ele quiser voltar, é só chamar. Sem drama, sem culpa, sem tentativa de reter. Respeite a decisão.
+
 HISTÓRICO: {history_summary or 'primeiro contato'}"""
 
 class AttendantAgent:
@@ -112,6 +115,18 @@ class AttendantAgent:
             if channel:
                 await self.memory.set_channel(phone, owner_id, channel)
 
+        # ── Detecção de opt-out de nurturing ───────────────────────────────
+        if _detect_nurture_optout(display_message):
+            await self.memory.update_customer(phone, owner_id, {"nurture_paused": True})
+            logger.info(f"[Attendant] {phone} pediu opt-out de nurturing")
+
+        # ── Detecção de aniversário ─────────────────────────────────────────
+        if not customer.birthday:
+            detected_bday = _detect_birthday(display_message)
+            if detected_bday:
+                await self.memory.update_customer(phone, owner_id, {"birthday": detected_bday})
+                logger.info(f"[Attendant] Aniversário detectado para {phone}: {detected_bday}")
+
         classification = await self.ai.classify_intent(display_message, context=customer.summary or "")
         is_simple = classification.get("is_simple", False)
         intent = classification.get("intent", "outros")
@@ -136,3 +151,62 @@ class AttendantAgent:
         await self.whatsapp.send_typing(phone, duration=len(response) * 40)
         await self.whatsapp.send_message(phone, response)
         logger.info(f"[Attendant] {phone} | intent={intent} | media={media_type}")
+
+
+# ── Helpers de detecção ──────────────────────────────────────────────────────
+
+_OPTOUT_PATTERNS = [
+    r"para[r]?\s*(de\s*)?(mandar|enviar)\s*(mensage[mn]s?|msg)",
+    r"n[aã]o\s*(me\s*)?(mand[ae]|envi[ae])\s*(mais\s*)?(mensage[mn]s?|msg)",
+    r"n[aã]o\s*quero\s*(mais\s*)?(receber|mensage[mn])",
+    r"para\s*com\s*(as\s*)?(mensage[mn]s?|msg)",
+    r"me\s*tir[ae]\s*(d[aeo]s?\s*)?(lista|mensage[mn])",
+    r"chega\s*de\s*mensage[mn]",
+    r"n[aã]o\s*precis[ao]\s*(mais\s*)?de\s*(vocês|vcs|contato)",
+    r"cancelar?\s*(mensage[mn]s?|contato|envio)",
+]
+
+def _detect_nurture_optout(message: str) -> bool:
+    """Detecta se o cliente está pedindo pra parar de receber mensagens."""
+    msg_lower = message.lower().strip()
+    for pattern in _OPTOUT_PATTERNS:
+        if re.search(pattern, msg_lower):
+            return True
+    return False
+
+
+def _detect_birthday(message: str) -> str:
+    """Detecta data de aniversário mencionada em mensagem.
+    Retorna 'DD/MM' se encontrar, string vazia se não."""
+    msg_lower = message.lower()
+
+    # Padrões: "meu aniversário é 15/03", "nasci dia 15 de março", "faço aniversário 15/03"
+    # DD/MM ou DD/MM/AAAA
+    date_match = re.search(
+        r'(?:anivers[aá]rio|nasci|fa[çc]o\s*anos?|niver)\s*(?:[eé:]\s*)?(?:dia\s*)?(\d{1,2})[/\-](\d{1,2})',
+        msg_lower
+    )
+    if date_match:
+        day, month = date_match.group(1), date_match.group(2)
+        if 1 <= int(day) <= 31 and 1 <= int(month) <= 12:
+            return f"{int(day):02d}/{int(month):02d}"
+
+    # "nasci dia 15 de março", "meu niver é 3 de janeiro"
+    _MONTHS = {
+        "janeiro": "01", "fevereiro": "02", "março": "03", "marco": "03",
+        "abril": "04", "maio": "05", "junho": "06", "julho": "07",
+        "agosto": "08", "setembro": "09", "outubro": "10",
+        "novembro": "11", "dezembro": "12"
+    }
+    text_match = re.search(
+        r'(?:anivers[aá]rio|nasci|fa[çc]o\s*anos?|niver)\s*(?:[eé:]\s*)?(?:dia\s*)?(\d{1,2})\s*(?:de\s*)(\w+)',
+        msg_lower
+    )
+    if text_match:
+        day = text_match.group(1)
+        month_text = text_match.group(2)
+        month = _MONTHS.get(month_text, "")
+        if month and 1 <= int(day) <= 31:
+            return f"{int(day):02d}/{month}"
+
+    return ""

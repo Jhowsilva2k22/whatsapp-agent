@@ -194,6 +194,14 @@ class QualifierAgent:
             if channel:
                 await self.memory.set_channel(phone, owner_id, channel)
 
+        # ── Detecção de aniversário ─────────────────────────────────────────
+        if not customer.birthday:
+            from app.agents.attendant import _detect_birthday
+            detected_bday = _detect_birthday(display_message)
+            if detected_bday:
+                await self.memory.update_customer(phone, owner_id, {"birthday": detected_bday})
+                logger.info(f"[Qualifier] Aniversário detectado para {phone}: {detected_bday}")
+
         classification = await self.ai.classify_intent(display_message, context=customer.summary or "")
         intent = classification.get("intent", "outros")
         score_delta = classification.get("lead_score_delta", 0)

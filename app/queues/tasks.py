@@ -16,6 +16,7 @@ celery_app.conf.update(
         "app.queues.tasks.process_buffered": {"queue": "messages"},
         "app.queues.tasks.follow_up_active": {"queue": "messages"},
         "app.queues.tasks.follow_up_cold_leads": {"queue": "messages"},
+        "app.queues.tasks.nurture_customers": {"queue": "messages"},
         "app.queues.tasks.nightly_learning": {"queue": "learning"},
         "app.queues.tasks.nightly_learning_all": {"queue": "learning"},
         "app.queues.tasks.learn_from_links": {"queue": "learning"},
@@ -29,6 +30,11 @@ celery_app.conf.update(
         "follow-up-cold-leads": {
             "task": "app.queues.tasks.follow_up_cold_leads",
             "schedule": 3600.0,  # checa a cada 1h
+            "options": {"queue": "messages"},
+        },
+        "nurture-customers": {
+            "task": "app.queues.tasks.nurture_customers",
+            "schedule": 43200.0,  # checa a cada 12h
             "options": {"queue": "messages"},
         },
     },
@@ -507,3 +513,192 @@ def follow_up_cold_leads():
                 continue
 
     logger.info(f"[ColdFollowUp] Ciclo completo: {total_sent} follow-ups enviados")
+
+
+# ── Nurturing: clientes ativos (semanal + aniversário) ──────────────────────
+
+@celery_app.task(queue="messages")
+def nurture_customers():
+    """Mantém relacionamento com clientes existentes.
+    Roda via Celery Beat a cada 12h.
+    - Aniversário: mensagem especial no dia
+    - Semanal: check-in leve se não houve contato em 7+ dias
+    - Respeita nurture_paused (cliente pediu pra parar)
+    """
+    from datetime import datetime, timedelta, timezone
+    from app.database import get_db
+    from app.services.memory import MemoryService
+    from app.services.ai import AIService
+    from app.services.whatsapp import WhatsAppService
+
+    db = get_db()
+    memory = MemoryService()
+    ai = AIService()
+    wa = WhatsAppService()
+    now = datetime.now(timezone.utc)
+    today_ddmm = now.strftime("%d/%m")
+
+    owners_result = db.table("owners").select("id,phone,business_name,tone,context_summary,main_offer").execute()
+    if not owners_result.data:
+        return
+
+    total_sent = 0
+
+    for owner in owners_result.data:
+        owner_id = owner["id"]
+
+        result = db.table("customers").select(
+            "phone,name,lead_status,summary,last_contact,total_messages,"
+            "birthday,nurture_paused,last_nurture"
+        ).eq("owner_id", owner_id).eq("lead_status", "cliente").execute()
+
+        if not result.data:
+            continue
+
+        for client in result.data:
+            phone = client.get("phone", "")
+            if not phone:
+                continue
+
+            # Respeita opt-out
+            if client.get("nurture_paused"):
+                continue
+
+            client_name = client.get("name") or ""
+            summary = client.get("summary") or ""
+            birthday = client.get("birthday") or ""
+
+            # ── Aniversário ─────────────────────────────────────────────
+            is_birthday = False
+            if birthday:
+                # Aceita "DD/MM" ou "DD/MM/AAAA"
+                bday_ddmm = birthday[:5] if len(birthday) >= 5 else birthday
+                if bday_ddmm == today_ddmm:
+                    is_birthday = True
+
+            if is_birthday:
+                try:
+                    name = owner.get("business_name", "a empresa")
+                    tone = owner.get("tone", "acolhedor e direto")
+                    display_name = client_name or "o cliente"
+
+                    system_prompt = (
+                        f"Você é {name}, conversando pelo WhatsApp. Tom: {tone}. "
+                        f"Cliente: {display_name}. Contexto: {summary[:200] if summary else 'cliente ativo'}. "
+                        f"Regras: frases curtas, sem bullet points, sem asteriscos, máximo 1 emoji."
+                    )
+                    instruction = (
+                        f"Hoje é aniversário de {display_name}! Envie UMA mensagem de parabéns genuína e calorosa. "
+                        f"Pode ser pessoal se souber algo sobre a pessoa pelo histórico. "
+                        f"NÃO use 'parabéns' genérico de script. Seja humano e presente. "
+                        f"Máximo 3 frases. Pode usar 1 emoji de celebração."
+                    )
+
+                    history = run_async(memory.get_conversation_history(phone, owner_id))
+                    response = run_async(ai.respond(
+                        system_prompt=system_prompt,
+                        history=history[-4:] if history else [],
+                        user_message=instruction,
+                        use_gemini=False
+                    ))
+
+                    if response:
+                        run_async(wa.send_typing(phone, duration=len(response) * 40))
+                        run_async(wa.send_message(phone, response))
+                        run_async(memory.save_turn(phone, owner_id, "assistant", response))
+                        db.table("customers").update(
+                            {"last_nurture": now.isoformat()}
+                        ).eq("phone", phone).eq("owner_id", owner_id).execute()
+                        total_sent += 1
+                        logger.info(f"[Nurture] Aniversário enviado para {phone}")
+
+                except Exception as e:
+                    logger.error(f"[Nurture] Erro aniversário {phone}: {e}")
+
+                continue  # Não manda check-in semanal no dia do aniversário
+
+            # ── Check-in semanal ────────────────────────────────────────
+            last_contact = client.get("last_contact")
+            last_nurture = client.get("last_nurture")
+
+            # Calcula dias desde último contato e último nurture
+            try:
+                if last_contact:
+                    if hasattr(last_contact, 'timestamp'):
+                        lc_dt = last_contact
+                    else:
+                        lc_dt = datetime.fromisoformat(str(last_contact).replace("Z", "+00:00"))
+                        if lc_dt.tzinfo is None:
+                            lc_dt = lc_dt.replace(tzinfo=timezone.utc)
+                    days_since_contact = (now - lc_dt).total_seconds() / 86400
+                else:
+                    days_since_contact = 999
+
+                if last_nurture:
+                    if hasattr(last_nurture, 'timestamp'):
+                        ln_dt = last_nurture
+                    else:
+                        ln_dt = datetime.fromisoformat(str(last_nurture).replace("Z", "+00:00"))
+                        if ln_dt.tzinfo is None:
+                            ln_dt = ln_dt.replace(tzinfo=timezone.utc)
+                    days_since_nurture = (now - ln_dt).total_seconds() / 86400
+                else:
+                    days_since_nurture = 999
+            except Exception:
+                days_since_contact = 999
+                days_since_nurture = 999
+
+            # Só manda se: 7+ dias sem contato E 6+ dias desde último nurture
+            if days_since_contact < 7 or days_since_nurture < 6:
+                continue
+
+            try:
+                name = owner.get("business_name", "a empresa")
+                tone = owner.get("tone", "acolhedor e direto")
+                display_name = client_name or "o cliente"
+                offer = owner.get("main_offer", "")
+
+                system_prompt = (
+                    f"Você é {name}, conversando pelo WhatsApp. Tom: {tone}. "
+                    f"Cliente: {display_name}. Contexto: {summary[:200] if summary else 'cliente ativo'}. "
+                    f"Oferta principal: {offer}. "
+                    f"Regras: frases curtas, sem bullet points, sem asteriscos, máximo 1 emoji."
+                )
+                instruction = (
+                    f"Faz uns dias que não falamos com {display_name}, que já é cliente. "
+                    f"Baseado no HISTÓRICO da conversa e no que ele comprou/contratou/demonstrou interesse, "
+                    f"escolha UMA dessas abordagens (a que fizer mais sentido com o perfil dele):\n"
+                    f"1. Produto/serviço complementar: 'pensei em você, tem algo novo que combina com o que você já usa/contratou'\n"
+                    f"2. Novidade relevante: lançamento, atualização, conteúdo novo conectado ao interesse dele\n"
+                    f"3. Check-in genuíno: como está indo com o que adquiriu, se teve resultado, se precisa de ajuda\n"
+                    f"4. Dica útil: algo prático conectado ao universo dele baseado no que conversaram\n\n"
+                    f"A mensagem deve soar como se você LEMBROU da pessoa naturalmente — "
+                    f"tipo 'cara, pensei em você quando vi isso' ou 'lembrei que você tinha interesse em X'. "
+                    f"Use detalhes REAIS do histórico (produto contratado, dúvida que teve, interesse demonstrado). "
+                    f"NÃO pareça script. NÃO pareça cobrança. NÃO use 'sumiu'. NÃO force venda. "
+                    f"Se não souber o que a pessoa comprou, vá pelo caminho do check-in genuíno. "
+                    f"Máximo 3 frases. Tom: presente, pessoal, como quem se importa de verdade."
+                )
+
+                history = run_async(memory.get_conversation_history(phone, owner_id))
+                response = run_async(ai.respond(
+                    system_prompt=system_prompt,
+                    history=history[-4:] if history else [],
+                    user_message=instruction,
+                    use_gemini=False
+                ))
+
+                if response:
+                    run_async(wa.send_typing(phone, duration=len(response) * 40))
+                    run_async(wa.send_message(phone, response))
+                    run_async(memory.save_turn(phone, owner_id, "assistant", response))
+                    db.table("customers").update(
+                        {"last_nurture": now.isoformat()}
+                    ).eq("phone", phone).eq("owner_id", owner_id).execute()
+                    total_sent += 1
+                    logger.info(f"[Nurture] Check-in semanal para {phone}")
+
+            except Exception as e:
+                logger.error(f"[Nurture] Erro check-in {phone}: {e}")
+
+    logger.info(f"[Nurture] Ciclo completo: {total_sent} mensagens enviadas")

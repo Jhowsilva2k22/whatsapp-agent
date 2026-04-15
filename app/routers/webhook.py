@@ -154,12 +154,15 @@ async def receive_whatsapp(request: Request):
             _redis.expire(ts_key, 1800)  # TTL 30min
             _redis.delete(fu_key)  # reseta follow-up ativo ao receber msg
 
-            # Reseta follow_up_stage se lead voltou a responder
-            # (cold leads que responderam voltam pro fluxo normal)
+            # Reseta follow_up_stage e nurture_paused se lead/cliente voltou a responder
+            reset_fields = {}
             if hasattr(customer, 'follow_up_stage') and (customer.follow_up_stage or 0) > 0:
+                reset_fields["follow_up_stage"] = 0
+            if hasattr(customer, 'nurture_paused') and customer.nurture_paused:
+                reset_fields["nurture_paused"] = False
+            if reset_fields:
                 await memory.update_customer(
-                    message.phone, owner["id"],
-                    {"follow_up_stage": 0}
+                    message.phone, owner["id"], reset_fields
                 )
 
             # Revoga follow-up ativo anterior (se existir)
