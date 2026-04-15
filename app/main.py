@@ -28,6 +28,26 @@ app.include_router(panel.router, tags=["Panel"])
 async def root():
     return {"service": "WhatsApp AI Agent", "status": "online", "version": "1.0.0"}
 
+@app.get("/debug/ig-check")
+async def ig_check():
+    """Endpoint temporario de diagnostico — REMOVER DEPOIS."""
+    s = get_settings()
+    from app.services.memory import MemoryService
+    mem = MemoryService()
+    owners = []
+    try:
+        result = mem.db.table("owners").select("id,name,instagram_account_id").execute()
+        owners = [{"id": o["id"], "name": o.get("name"), "ig_id": o.get("instagram_account_id")} for o in (result.data or [])]
+    except Exception as e:
+        owners = [{"error": str(e)}]
+    return {
+        "meta_page_id": s.meta_page_id[:6] + "..." if s.meta_page_id else "NAO_CONFIGURADO",
+        "meta_page_token": s.meta_page_token[:10] + "..." if s.meta_page_token else "NAO_CONFIGURADO",
+        "instagram_account_id": s.instagram_account_id or "NAO_CONFIGURADO",
+        "meta_verify_token": s.meta_verify_token or "NAO_CONFIGURADO",
+        "owners_with_ig": owners,
+    }
+
 
 async def _subscribe_instagram_webhook():
     """Garante que a Page está inscrita no webhook de mensagens do Instagram."""
