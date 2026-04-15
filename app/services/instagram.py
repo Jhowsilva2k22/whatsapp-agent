@@ -41,6 +41,24 @@ class InstagramService:
                     logger.error(f"[IG Send] Response: {e.response.text[:500]}")
                 raise
 
+    async def get_user_profile(self, igsid: str) -> dict:
+        """Busca nome e username do usuário pelo IGSID via Graph API."""
+        url = f"{GRAPH_API}/{igsid}"
+        params = {
+            "fields": "name,username",
+            "access_token": self.page_token,
+        }
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                response = await client.get(url, params=params)
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"[IG Profile] {igsid} → name={data.get('name')} username={data.get('username')}")
+                    return data
+            except Exception as e:
+                logger.warning(f"[IG Profile] Falha ao buscar perfil de {igsid}: {e}")
+        return {}
+
     async def send_typing(self, recipient_id: str, duration: int = 3000):
         """Envia indicador de digitando (sender_action)."""
         url = f"{GRAPH_API}/{self.page_id}/messages"

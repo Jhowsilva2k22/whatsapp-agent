@@ -80,8 +80,23 @@ async def receive_instagram(request: Request):
 
         # ── Garante customer com channel=instagram ──────────────────────
         customer = await memory.get_or_create_customer(sender_id, owner_id)
+        updates = {}
         if not customer.channel or customer.channel != "instagram":
-            await memory.update_customer(sender_id, owner_id, {"channel": "instagram"})
+            updates["channel"] = "instagram"
+
+        # ── Busca nome do perfil Instagram se ainda não temos ───────────
+        if not customer.name:
+            try:
+                profile = await instagram.get_user_profile(sender_id)
+                ig_name = profile.get("name") or profile.get("username") or ""
+                if ig_name:
+                    updates["name"] = ig_name.title()
+                    logger.info(f"[IG Webhook] Nome do perfil salvo: {ig_name} ({sender_id})")
+            except Exception as e:
+                logger.warning(f"[IG Webhook] Falha ao buscar nome do perfil: {e}")
+
+        if updates:
+            await memory.update_customer(sender_id, owner_id, updates)
 
         # ── Bloqueia bot se em atendimento humano ───────────────────────
         if customer.lead_status == "em_atendimento_humano":
