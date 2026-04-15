@@ -56,10 +56,12 @@ class MemoryService:
             from app.services.ai import AIService
             summary_text = await AIService().compress_conversation(to_compress)
             if summary_text:
-                # Mescla com resumo existente do cliente
+                # Pega notas do dono (preserva) e substitui o resumo antigo
                 customer = self.db.table("customers").select("summary").eq("phone", phone).eq("owner_id", owner_id).maybe_single().execute()
                 existing = (customer.data.get("summary") or "") if customer and customer.data else ""
-                new_summary = f"{existing}\n{summary_text}".strip() if existing else summary_text
+                # Preserva apenas notas do dono
+                notes = "\n".join(line for line in existing.split("\n") if line.strip().startswith("[Nota"))
+                new_summary = f"{summary_text}\n{notes}".strip() if notes else summary_text
                 self.db.table("customers").update({"summary": new_summary}).eq("phone", phone).eq("owner_id", owner_id).execute()
         except Exception as e:
             logger.error(f"[Memory] Erro ao comprimir histórico: {e}")

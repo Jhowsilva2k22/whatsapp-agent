@@ -366,7 +366,7 @@ function renderLeads(leads) {{
   tbody.innerHTML = leads.map(l => `
     <tr onclick="openLead('${{l.phone}}','${{l.owner_id}}')">
       <td class="name">${{l.name || '—'}}</td>
-      <td class="phone"><a href="https://wa.me/${{(l.phone||'').replace(/\\D/g,'')}}" target="_blank" onclick="event.stopPropagation()">${{l.phone}}</a></td>
+      <td class="phone"><a href="https://wa.me/${{(l.phone||'').replace(/[^0-9]/g,'')}}" target="_blank" onclick="event.stopPropagation()">${{l.phone}}</a></td>
       <td><span class="score ${{scoreClass(l.lead_score||0)}}">${{l.lead_score||0}}</span></td>
       <td><span class="badge ${{l.lead_status||'novo'}}">${{l.lead_status||'novo'}}</span></td>
       <td class="ch">${{l.channel||'—'}}</td>
@@ -381,16 +381,16 @@ function renderLeads(leads) {{
 function formatSummary(raw) {{
   if (!raw || raw === '—') return '<em style="color:#555">Sem resumo ainda.</em>';
   // Remove markdown noise
-  let text = raw.replace(/\*\*/g, '').replace(/##/g, '').replace(/\n- /g, '\n').trim();
-  // Quebra em blocos por "Resumo da Conversa" ou "Nota"
-  const blocks = text.split(/(?=#\s*Resumo|(?:\[Nota))/g).filter(b => b.trim());
+  let text = raw.replace(/[*#]/g, '').replace(/\\n- /g, '\\n').trim();
+  // Quebra em blocos por "Resumo" ou "Nota"
+  const blocks = text.split(/(?=Resumo da Conversa|\\[Nota)/g).filter(b => b.trim());
   if (blocks.length <= 1 && text.length < 400) return `<div class="s-text">${{text}}</div>`;
   // Pega só os últimos 2 blocos pra não ficar enorme
   const recent = blocks.slice(-2);
   return recent.map((block, i) => {{
     const isNote = block.trim().startsWith('[Nota');
     const label = isNote ? 'Nota do dono' : (i === recent.length -1 ? 'Resumo mais recente' : 'Resumo anterior');
-    const clean = block.replace(/^#\s*Resumo da Conversa\s*/i, '').trim();
+    const clean = block.replace(/^Resumo da Conversa\\s*/i, '').trim();
     return `<div class="s-label">${{label}}</div><div class="s-text">${{clean.substring(0, 300)}}${{clean.length > 300 ? '...' : ''}}</div>`;
   }}).join('');
 }}
@@ -402,7 +402,7 @@ async function openLead(phone, ownerId) {{
   // Cards com info do lead
   document.getElementById('m-meta').innerHTML = `
     <div class="lead-cards">
-      <div class="lead-card"><div class="lc-label">Contato</div><div class="lc-val"><a href="https://wa.me/${{(phone||'').replace(/\\D/g,'')}}" target="_blank" style="color:#4fc3f7;text-decoration:none">${{phone}}</a></div></div>
+      <div class="lead-card"><div class="lc-label">Contato</div><div class="lc-val"><a href="https://wa.me/${{(phone||'').replace(/[^0-9]/g,'')}}" target="_blank" style="color:#4fc3f7;text-decoration:none">${{phone}}</a></div></div>
       <div class="lead-card"><div class="lc-label">Score</div><div class="lc-val" style="color:${{(lead.lead_score||0)>=70?'#ff6b35':(lead.lead_score||0)>=40?'#ffb74d':'#666'}}">${{lead.lead_score||0}}/100</div></div>
       <div class="lead-card"><div class="lc-label">Canal</div><div class="lc-val">${{lead.channel||'desconhecido'}}</div></div>
       <div class="lead-card"><div class="lc-label">Status</div><div class="lc-val"><span class="badge ${{lead.lead_status||'novo'}}">${{lead.lead_status||'novo'}}</span></div></div>
