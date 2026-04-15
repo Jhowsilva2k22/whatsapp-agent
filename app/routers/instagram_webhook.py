@@ -45,11 +45,13 @@ async def receive_instagram(request: Request):
         raise HTTPException(status_code=400, detail="Payload invalido")
 
     logger.info(f"[IG Webhook] Recebido: object={payload.get('object')}")
+    logger.info(f"[IG Webhook] Payload completo: {_json.dumps(payload)[:2000]}")
 
     instagram = InstagramService()
     messages = instagram.parse_webhook(payload)
 
     if not messages:
+        logger.info(f"[IG Webhook] parse_webhook retornou vazio — ignorado")
         return {"status": "ignored"}
 
     memory = MemoryService()
