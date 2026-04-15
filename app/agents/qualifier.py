@@ -1,6 +1,7 @@
 from app.services.ai import AIService
 from app.services.memory import MemoryService
 from app.services.whatsapp import WhatsAppService
+from app.services import sender
 import logging
 import re
 
@@ -128,6 +129,9 @@ class QualifierAgent:
         if not owner:
             return
 
+        # Canal do lead (whatsapp ou instagram)
+        ch = customer.channel or "whatsapp"
+
         # ── Boas-vindas no primeiro contato ─────────────────────────────────
         is_first_contact = (customer.total_messages or 0) == 0
         welcome_msg = (owner.get("welcome_message") or "")
@@ -135,8 +139,8 @@ class QualifierAgent:
             # Substitui variáveis dinâmicas
             final_welcome = welcome_msg.replace("{nome}", customer.name or "")
             final_welcome = final_welcome.replace("{negocio}", owner.get("business_name", ""))
-            await self.whatsapp.send_typing(phone, duration=len(final_welcome) * 40)
-            await self.whatsapp.send_message(phone, final_welcome)
+            await sender.send_typing(phone, channel=ch, duration=len(final_welcome) * 40)
+            await sender.send_message(phone, final_welcome, channel=ch)
             await self.memory.save_turn(phone, owner_id, "assistant", final_welcome)
 
         history = await self.memory.get_conversation_history(phone, owner_id)
@@ -146,7 +150,7 @@ class QualifierAgent:
         media_base64 = None
 
         if media_type in ("image", "audio", "document") and message_id:
-            media_base64 = await self.whatsapp.download_media_base64(message_id, phone=phone)
+            media_base64 = await sender.download_media(message_id, phone=phone, channel=ch)
             if not media_base64:
                 logger.warning(f"[Qualifier] falha ao baixar mídia tipo={media_type} id={message_id}")
 
@@ -177,8 +181,8 @@ class QualifierAgent:
                     user_message=follow_up_instruction,
                     use_gemini=False
                 )
-                await self.whatsapp.send_typing(phone, duration=len(follow_up) * 40)
-                await self.whatsapp.send_message(phone, follow_up)
+                await sender.send_typing(phone, channel=ch, duration=len(follow_up) * 40)
+                await sender.send_message(phone, follow_up, channel=ch)
                 await self.memory.save_turn(phone, owner_id, "assistant", follow_up)
                 return
 
@@ -236,7 +240,7 @@ class QualifierAgent:
                 sos_alert = (
                     f"{urgency_icon} *SOS — Atenção necessária!*\n\n"
                     f"👤 *{name}* | Score: *{new_score}*\n"
-                    f"📱 wa.me/{re.sub(r'\\D', '', phone)}\n"
+                    f"📱 wa.me/{re.sub(r'[^0-9]', '', phone)}\n"
                     f"🎭 Sentimento: *{sentiment}*\n"
                     f"📌 Motivo: {human_reason}\n\n"
                 )
@@ -293,9 +297,9 @@ class QualifierAgent:
             "last_intent": intent, "total_messages": (customer.total_messages or 0) + 1,
             "last_sentiment": sentiment, "sentiment_history": sent_history
         })
-        await self.whatsapp.send_typing(phone, duration=len(response) * 40)
-        await self.whatsapp.send_message(phone, response)
-        logger.info(f"[Qualifier] {phone} | intent={intent} | score={new_score} | media={media_type}")
+        await sender.send_typing(phone, channel=ch, duration=len(response) * 40)
+        await sender.send_message(phone, response, channel=ch)
+        logger.info(f"[Qualifier] {phone} | intent={intent} | score={new_score} | media={media_type} | ch={ch}")
 
     async def _trigger_handoff(self, phone: str, owner: dict, customer, message: str):
         notify_phone = owner.get("notify_phone")

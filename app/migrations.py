@@ -85,4 +85,8 @@ def get_migration_sql() -> str:
     lines = []
     for col_name, col_def in REQUIRED_COLUMNS.items():
         lines.append(f"ALTER TABLE customers ADD COLUMN IF NOT EXISTS {col_name} {col_def};")
+    # Owners: coluna pro Instagram
+    lines.append("")
+    lines.append("-- Instagram integration")
+    lines.append("ALTER TABLE owners ADD COLUMN IF NOT EXISTS instagram_account_id TEXT;")
     return "\n".join(lines)

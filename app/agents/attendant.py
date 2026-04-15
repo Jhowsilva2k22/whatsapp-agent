@@ -1,6 +1,7 @@
 from app.services.ai import AIService
 from app.services.memory import MemoryService
 from app.services.whatsapp import WhatsAppService
+from app.services import sender
 from app.agents.qualifier import _detect_channel
 import logging
 import re
@@ -76,14 +77,17 @@ class AttendantAgent:
         if not owner:
             return
 
+        # Canal do lead (whatsapp ou instagram)
+        ch = customer.channel or "whatsapp"
+
         # ── Boas-vindas no primeiro contato ─────────────────────────────────
         is_first_contact = (customer.total_messages or 0) == 0
         welcome_msg = (owner.get("welcome_message") or "")
         if is_first_contact and welcome_msg:
             final_welcome = welcome_msg.replace("{nome}", customer.name or "")
             final_welcome = final_welcome.replace("{negocio}", owner.get("business_name", ""))
-            await self.whatsapp.send_typing(phone, duration=len(final_welcome) * 40)
-            await self.whatsapp.send_message(phone, final_welcome)
+            await sender.send_typing(phone, channel=ch, duration=len(final_welcome) * 40)
+            await sender.send_message(phone, final_welcome, channel=ch)
             await self.memory.save_turn(phone, owner_id, "assistant", final_welcome)
 
         history = await self.memory.get_conversation_history(phone, owner_id)
@@ -93,7 +97,7 @@ class AttendantAgent:
         media_base64 = None
 
         if media_type in ("image", "audio", "document") and message_id:
-            media_base64 = await self.whatsapp.download_media_base64(message_id, phone=phone)
+            media_base64 = await sender.download_media(message_id, phone=phone, channel=ch)
 
         if media_type == "audio" and media_base64:
             transcription = await self.ai.transcribe_audio(media_base64)
@@ -230,9 +234,9 @@ class AttendantAgent:
             "last_intent": intent, "total_messages": (customer.total_messages or 0) + 1,
             "last_sentiment": sentiment, "sentiment_history": sent_history
         })
-        await self.whatsapp.send_typing(phone, duration=len(response) * 40)
-        await self.whatsapp.send_message(phone, response)
-        logger.info(f"[Attendant] {phone} | intent={intent} | score={new_score} | status={new_status} | sos={sos_sent} | media={media_type}")
+        await sender.send_typing(phone, channel=ch, duration=len(response) * 40)
+        await sender.send_message(phone, response, channel=ch)
+        logger.info(f"[Attendant] {phone} | intent={intent} | score={new_score} | status={new_status} | sos={sos_sent} | media={media_type} | ch={ch}")
 
 
 def _auto_status(current_status: str, score: int) -> str:

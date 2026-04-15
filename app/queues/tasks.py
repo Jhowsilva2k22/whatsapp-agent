@@ -310,7 +310,7 @@ def follow_up_active(self, phone: str, owner_id: str, attempt: int = 1):
 
         from app.services.memory import MemoryService
         from app.services.ai import AIService
-        from app.services.whatsapp import WhatsAppService
+        from app.services import sender as _sender
 
         memory = MemoryService()
         customer = run_async(memory.get_or_create_customer(phone, owner_id))
@@ -318,6 +318,9 @@ def follow_up_active(self, phone: str, owner_id: str, attempt: int = 1):
         # Não faz follow-up em leads em atendimento humano ou já clientes
         if customer.lead_status in ("em_atendimento_humano", "cliente"):
             return
+
+        # Canal do lead
+        ch = customer.channel or "whatsapp"
 
         owner = run_async(memory.get_owner_context(owner_id))
         if not owner:
@@ -328,7 +331,6 @@ def follow_up_active(self, phone: str, owner_id: str, attempt: int = 1):
             return
 
         ai = AIService()
-        wa = WhatsAppService()
 
         if attempt == 1:
             instruction = (
@@ -364,8 +366,8 @@ def follow_up_active(self, phone: str, owner_id: str, attempt: int = 1):
         ))
 
         if response:
-            run_async(wa.send_typing(phone, duration=len(response) * 40))
-            run_async(wa.send_message(phone, response))
+            run_async(_sender.send_typing(phone, channel=ch, duration=len(response) * 40))
+            run_async(_sender.send_message(phone, response, channel=ch))
             run_async(memory.save_turn(phone, owner_id, "assistant", response))
             r.setex(fu_key, 3600, str(attempt))  # marca follow-up enviado (TTL 1h)
             logger.info(f"[FollowUp] Enviado attempt={attempt} para {phone}")

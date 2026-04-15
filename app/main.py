@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import webhook, onboarding, panel
+from app.routers import webhook, onboarding, panel, instagram_webhook
 from app.config import get_settings
 import logging
 
@@ -18,6 +18,7 @@ app = FastAPI(
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(webhook.router, tags=["WhatsApp"])
+app.include_router(instagram_webhook.router, tags=["Instagram"])
 app.include_router(onboarding.router, prefix="/api", tags=["Onboarding"])
 app.include_router(panel.router, tags=["Panel"])
 
@@ -29,6 +30,8 @@ async def root():
 async def startup():
     logger.info("WhatsApp AI Agent iniciado")
     logger.info(f"Instancia Evolution: {settings.evolution_instance}")
+    if settings.instagram_account_id:
+        logger.info(f"Instagram Account ID: {settings.instagram_account_id}")
     # Verifica colunas do banco
     try:
         from app.migrations import run_migrations
