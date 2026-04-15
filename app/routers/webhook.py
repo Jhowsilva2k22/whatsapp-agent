@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.services.whatsapp import WhatsAppService
 from app.services.memory import MemoryService
-from app.queues.tasks import process_message, process_buffered, learn_from_links, follow_up_active, weekly_report, recalculate_scores, celery_app, _panel_url
+from app.queues.tasks import process_message, process_buffered, learn_from_links, follow_up_active, weekly_report, recalculate_scores, run_campaign, celery_app, _panel_url
 from app.config import get_settings
 import logging
 import re
@@ -29,6 +29,7 @@ STATS_CMDS     = ("/stats", "/status", "/resumo")
 REPORT_CMDS    = ("/relatorio", "/relatório", "/report")
 RECALC_CMDS    = ("/recalcular",)
 PANEL_CMDS     = ("/painel", "/panel", "/dashboard")
+CAMPAIGN_PREFIX = ("/campanha ", "/campanha:")
 
 @router.post("/webhook/whatsapp")
 async def receive_whatsapp(request: Request):
@@ -179,6 +180,32 @@ async def receive_whatsapp(request: Request):
             await whatsapp.send_message(message.phone, f"📊 Acesse seu painel:\n👉 {panel}")
             return {"status": "panel_sent"}
 
+        # CAMPANHA: disparo ativo segmentado
+        if any(msg_lower.startswith(p) for p in CAMPAIGN_PREFIX):
+            for p in CAMPAIGN_PREFIX:
+                if msg_lower.startswith(p):
+                    campaign_text = raw_text[len(p):].strip()
+                    break
+            if not campaign_text:
+                await whatsapp.send_message(message.phone,
+                    "📢 Use assim:\n\n"
+                    "/campanha [descrição]\n\n"
+                    "Exemplo:\n"
+                    "/campanha lançamento do curso de educação financeira pra filhos, tom urgente mas acolhedor, público: leads mornos pra cima\n\n"
+                    "Filtros opcionais no texto:\n"
+                    "• público: todos | novos | mornos | quentes | clientes\n"
+                    "• score mínimo: ex 'score acima de 30'\n\n"
+                    "A IA personaliza cada mensagem com nome e histórico do lead."
+                )
+                return {"status": "campaign_help"}
+            try:
+                await whatsapp.send_message(message.phone, "📢 Preparando campanha... vou analisar seus leads e gerar as mensagens personalizadas.")
+                run_campaign.apply_async(args=[owner["id"], campaign_text], queue="learning")
+            except Exception as e:
+                logger.error(f"[Webhook] Erro ao agendar campanha: {e}")
+                await whatsapp.send_message(message.phone, "⚠️ Erro ao iniciar campanha.")
+            return {"status": "campaign_queued"}
+
         # AJUDA: lista todos os comandos disponíveis
         if msg_lower in ("/help", "/ajuda", "/comandos"):
             help_msg = (
@@ -186,6 +213,7 @@ async def receive_whatsapp(request: Request):
                 "/stats — resumo rápido do dia\n"
                 "/relatorio — relatório semanal completo com IA\n"
                 "/recalcular — recalcula scores de todos os leads\n"
+                "/campanha [texto] — disparo ativo personalizado\n"
                 "/assumir [telefone] — assumir atendimento de um lead\n"
                 "/retomar [telefone] — devolver lead pro bot\n"
                 "/cliente [telefone] — marcar como cliente\n"

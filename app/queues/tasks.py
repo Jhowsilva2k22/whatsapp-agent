@@ -30,6 +30,7 @@ celery_app.conf.update(
         "app.queues.tasks.nightly_learning": {"queue": "learning"},
         "app.queues.tasks.nightly_learning_all": {"queue": "learning"},
         "app.queues.tasks.learn_from_links": {"queue": "learning"},
+        "app.queues.tasks.run_campaign": {"queue": "learning"},
     },
     beat_schedule={
         "nightly-learning-all": {
@@ -1024,3 +1025,169 @@ def recalculate_scores(owner_id: str):
         run_async(wa.send_message(owner_phone, msg))
 
     logger.info(f"[Recalc] Concluído: {updated}/{total} leads atualizados")
+
+
+# ── Campanhas Ativas ─────────────────────────────────────────────────────────
+
+@celery_app.task(queue="learning")
+def run_campaign(owner_id: str, campaign_description: str):
+    """Dispara campanha ativa personalizada pra leads segmentados."""
+    from app.database import get_db
+    from app.services.ai import AIService
+    from app.services.whatsapp import WhatsAppService
+    import time
+    import re as re_mod
+
+    db = get_db()
+    ai = AIService()
+    wa = WhatsAppService()
+
+    # Busca owner
+    owner_result = db.table("owners").select("*").eq("id", owner_id).maybe_single().execute()
+    if not owner_result or not owner_result.data:
+        logger.error(f"[Campaign] Owner {owner_id} não encontrado")
+        return
+    owner = owner_result.data
+    owner_phone = owner.get("notify_phone") or owner.get("phone")
+    business_name = owner.get("business_name", "")
+
+    # ── Parseia filtros do texto da campanha ──────────────────────────
+    desc_lower = campaign_description.lower()
+
+    # Filtro de público
+    target_statuses = None  # None = todos
+    if "clientes" in desc_lower or "cliente" in desc_lower:
+        target_statuses = ["cliente"]
+    elif "quentes" in desc_lower or "quente" in desc_lower:
+        target_statuses = ["quente", "cliente"]
+    elif "mornos" in desc_lower or "morno" in desc_lower:
+        target_statuses = ["morno", "quente", "cliente"]
+    elif "qualificando" in desc_lower:
+        target_statuses = ["qualificando", "morno", "quente", "cliente"]
+    elif "novos" in desc_lower or "novo" in desc_lower:
+        target_statuses = ["novo"]
+
+    # Filtro de score mínimo
+    min_score = 0
+    score_match = re_mod.search(r'score\s*(?:acima\s*de|maior\s*que|>=?|mínimo)\s*(\d+)', desc_lower)
+    if score_match:
+        min_score = int(score_match.group(1))
+
+    # ── Busca leads elegíveis ─────────────────────────────────────────
+    query = db.table("customers").select(
+        "phone,name,lead_score,lead_status,summary,channel,last_sentiment,nurture_paused,total_messages"
+    ).eq("owner_id", owner_id)
+
+    if target_statuses:
+        query = query.in_("lead_status", target_statuses)
+    if min_score > 0:
+        query = query.gte("lead_score", min_score)
+
+    result = query.execute()
+    leads = result.data if result and result.data else []
+
+    # Filtra: não envia pra quem pediu opt-out ou tem 0 mensagens
+    leads = [l for l in leads if not l.get("nurture_paused") and (l.get("total_messages") or 0) > 0]
+
+    if not leads:
+        if owner_phone:
+            run_async(wa.send_message(owner_phone,
+                "📢 Nenhum lead encontrado com os filtros dessa campanha. "
+                "Tente ajustar o público ou o score mínimo."
+            ))
+        return
+
+    # ── Notifica início ───────────────────────────────────────────────
+    total = len(leads)
+    if owner_phone:
+        status_info = f"Status: {', '.join(target_statuses)}" if target_statuses else "Todos os status"
+        run_async(wa.send_message(owner_phone,
+            f"📢 *Campanha iniciada!*\n\n"
+            f"👥 {total} leads selecionados\n"
+            f"📊 {status_info}\n"
+            f"{'📈 Score mínimo: ' + str(min_score) if min_score > 0 else ''}\n\n"
+            f"Gerando mensagens personalizadas e disparando..."
+        ))
+
+    # ── Gera e envia mensagens personalizadas ─────────────────────────
+    sent = 0
+    errors = 0
+    responded = []
+
+    for lead in leads:
+        phone = lead.get("phone")
+        name = lead.get("name") or "amigo"
+        summary = lead.get("summary") or "sem histórico"
+        score = lead.get("lead_score") or 0
+        sentiment = lead.get("last_sentiment") or "neutro"
+        status = lead.get("lead_status") or "novo"
+
+        try:
+            # IA gera mensagem personalizada
+            prompt = f"""Você é {business_name}. Gere UMA mensagem de WhatsApp personalizada pra esta campanha.
+
+CAMPANHA: {campaign_description}
+
+LEAD: {name}
+HISTÓRICO: {summary[:300]}
+STATUS: {status} | SCORE: {score} | SENTIMENTO: {sentiment}
+
+REGRAS:
+- Máximo 3 frases, direto e pessoal
+- Use o nome do lead naturalmente
+- Conecte com o histórico/interesse dele quando possível
+- Tom natural de WhatsApp, como se fosse o dono mandando
+- ZERO bullet points, ZERO asteriscos, ZERO formalidade
+- Se for cliente: tom de relacionamento e cuidado
+- Se for lead: tom de oportunidade e valor
+- Não pareça propaganda genérica — tem que parecer que pensou nele
+- Máximo 1 emoji, e só se fizer sentido
+
+Responda APENAS a mensagem, nada mais."""
+
+            response = ai.claude.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            msg = response.content[0].text.strip()
+
+            # Envia com delay pra não parecer spam
+            run_async(wa.send_typing(phone, duration=len(msg) * 40))
+            run_async(wa.send_message(phone, msg))
+
+            # Salva na tabela de mensagens pra manter histórico
+            db.table("messages").insert({
+                "phone": phone, "owner_id": owner_id,
+                "role": "assistant", "content": f"[Campanha] {msg}",
+                "created_at": __import__("datetime").datetime.utcnow().isoformat()
+            }).execute()
+
+            sent += 1
+            logger.info(f"[Campaign] Enviado pra {name} ({phone})")
+
+            # Delay entre mensagens (2-4 segundos) pra não travar API
+            time.sleep(3)
+
+        except Exception as e:
+            errors += 1
+            logger.error(f"[Campaign] Erro {phone}: {e}")
+
+    # ── Relatório final ───────────────────────────────────────────────
+    if owner_phone:
+        panel = _panel_url()
+        report = (
+            f"✅ *Campanha finalizada!*\n\n"
+            f"📢 {campaign_description[:100]}{'...' if len(campaign_description) > 100 else ''}\n\n"
+            f"📊 *Resultado:*\n"
+            f"✉️ Enviadas: {sent}/{total}\n"
+        )
+        if errors:
+            report += f"⚠️ Erros: {errors}\n"
+        report += (
+            f"\nAs respostas dos leads vão chegar normalmente e o bot continua atendendo.\n\n"
+            f"👉 Ver painel: {panel}"
+        )
+        run_async(wa.send_message(owner_phone, report))
+
+    logger.info(f"[Campaign] Concluída: {sent}/{total} enviadas, {errors} erros")
