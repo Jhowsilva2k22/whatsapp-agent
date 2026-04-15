@@ -97,6 +97,70 @@ async def privacy_policy():
 </body></html>"""
 
 
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_of_service():
+    return """<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Termos de Servico - Joanderson Ecosistema</title>
+<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#333;line-height:1.6}h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:1.5rem}</style></head>
+<body>
+<h1>Termos de Servico</h1>
+<p><strong>Ultima atualizacao:</strong> 15 de abril de 2026</p>
+<p>Ao utilizar os servicos do <strong>Joanderson Ecosistema</strong>, voce concorda com os termos abaixo.</p>
+
+<h2>1. Descricao do servico</h2>
+<p>Oferecemos um servico de atendimento automatizado via Instagram e WhatsApp, utilizando inteligencia artificial para responder mensagens, qualificar leads e auxiliar no relacionamento com clientes.</p>
+
+<h2>2. Uso aceitavel</h2>
+<p>Voce concorda em utilizar o servico de forma etica e legal. E proibido enviar conteudo ofensivo, spam ou qualquer material que viole leis vigentes.</p>
+
+<h2>3. Disponibilidade</h2>
+<p>Nos esforçamos para manter o servico disponivel 24 horas, mas nao garantimos disponibilidade ininterrupta. Manutencoes e atualizacoes podem causar interrupcoes temporarias.</p>
+
+<h2>4. Propriedade intelectual</h2>
+<p>Todo o conteudo, codigo e tecnologia do Joanderson Ecosistema sao de propriedade exclusiva do desenvolvedor. E proibida a reproducao sem autorizacao.</p>
+
+<h2>5. Limitacao de responsabilidade</h2>
+<p>O servico e fornecido "como esta". Nao nos responsabilizamos por decisoes tomadas com base nas respostas automatizadas ou por eventuais indisponibilidades.</p>
+
+<h2>6. Privacidade</h2>
+<p>O tratamento dos seus dados esta descrito na nossa <a href="/privacy">Politica de Privacidade</a>.</p>
+
+<h2>7. Alteracoes</h2>
+<p>Estes termos podem ser atualizados a qualquer momento. Recomendamos consultar esta pagina periodicamente.</p>
+
+<h2>8. Contato</h2>
+<p>Para duvidas sobre estes termos: <a href="mailto:joanderson5@gmail.com">joanderson5@gmail.com</a></p>
+</body></html>"""
+
+
+@app.get("/data-deletion", response_class=HTMLResponse)
+async def data_deletion():
+    return """<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Exclusao de Dados - Joanderson Ecosistema</title>
+<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#333;line-height:1.6}h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:1.5rem}</style></head>
+<body>
+<h1>Instrucoes para Exclusao de Dados</h1>
+<p><strong>Ultima atualizacao:</strong> 15 de abril de 2026</p>
+<p>O <strong>Joanderson Ecosistema</strong> respeita o seu direito de solicitar a exclusao dos seus dados pessoais armazenados em nossos sistemas.</p>
+
+<h2>Como solicitar a exclusao</h2>
+<p>Para solicitar a exclusao dos seus dados, envie um e-mail para <a href="mailto:joanderson5@gmail.com">joanderson5@gmail.com</a> com o assunto <strong>"Exclusao de Dados"</strong> incluindo:</p>
+<p>- Seu nome de usuario no Instagram ou numero de WhatsApp<br>
+- Uma breve descricao do que deseja excluir (historico de mensagens, dados de cadastro, etc.)</p>
+
+<h2>Prazo</h2>
+<p>Sua solicitacao sera processada em ate 15 dias uteis. Voce recebera uma confirmacao por e-mail quando a exclusao for concluida.</p>
+
+<h2>O que sera excluido</h2>
+<p>Todos os dados associados ao seu perfil: historico de conversas, dados de qualificacao e informacoes de contato armazenadas em nosso sistema.</p>
+
+<h2>Contato</h2>
+<p>Duvidas: <a href="mailto:joanderson5@gmail.com">joanderson5@gmail.com</a></p>
+</body></html>"""
+
+
 @app.get("/api/migrate")
 async def migrate(token: str = ""):
     """Verifica colunas e retorna SQL de migração se necessário."""
