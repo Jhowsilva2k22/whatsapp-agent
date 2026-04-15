@@ -169,32 +169,46 @@ def _build_html(token: str) -> str:
 <title>Painel de Leads</title>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }}
-  .header {{ background: #1a1a1a; border-bottom: 1px solid #2a2a2a; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }}
+  html, body {{ height: 100%; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; display: flex; flex-direction: column; }}
+  .header {{ background: #1a1a1a; border-bottom: 1px solid #2a2a2a; padding: 16px 24px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }}
   .header h1 {{ font-size: 18px; font-weight: 600; color: #fff; }}
   .header span {{ font-size: 12px; color: #666; }}
-  .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; padding: 20px 24px 0; }}
-  .stat {{ background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 16px; }}
-  .stat .val {{ font-size: 28px; font-weight: 700; color: #fff; }}
-  .stat .lbl {{ font-size: 12px; color: #666; margin-top: 4px; }}
+  .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 16px 24px 0; flex-shrink: 0; }}
+  .stat {{ background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px; }}
+  .stat .val {{ font-size: 24px; font-weight: 700; color: #fff; }}
+  .stat .lbl {{ font-size: 11px; color: #666; margin-top: 2px; }}
   .stat.hot .val {{ color: #ff6b35; }}
   .stat.human .val {{ color: #4fc3f7; }}
   .stat.today .val {{ color: #66bb6a; }}
-  .channels {{ padding: 12px 24px 0; display: flex; gap: 8px; flex-wrap: wrap; }}
-  .ch-tag {{ background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 20px; padding: 4px 12px; font-size: 12px; color: #aaa; }}
+  .channels {{ padding: 10px 24px 0; display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }}
+  .ch-tag {{ background: #1e1e1e; border: 1px solid #2a2a2a; border-radius: 20px; padding: 3px 10px; font-size: 11px; color: #aaa; }}
   .ch-tag span {{ color: #fff; font-weight: 600; }}
-  .toolbar {{ padding: 16px 24px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }}
+  .toolbar {{ padding: 12px 24px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; flex-shrink: 0; }}
   .toolbar input {{ background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px 14px; color: #e0e0e0; font-size: 14px; width: 240px; outline: none; }}
   .toolbar input:focus {{ border-color: #444; }}
   .toolbar select {{ background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px 12px; color: #e0e0e0; font-size: 14px; outline: none; cursor: pointer; }}
   .toolbar a.btn {{ background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 8px 14px; color: #aaa; font-size: 13px; text-decoration: none; margin-left: auto; }}
   .toolbar a.btn:hover {{ color: #fff; border-color: #444; }}
+  .table-wrap {{ flex: 1; overflow-y: auto; padding: 0 24px 24px; }}
   table {{ width: 100%; border-collapse: collapse; }}
-  th {{ background: #151515; color: #666; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; padding: 10px 16px; text-align: left; cursor: pointer; user-select: none; position: sticky; top: 0; }}
+  th {{ background: #151515; color: #666; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; padding: 10px 16px; text-align: left; cursor: pointer; user-select: none; position: sticky; top: 0; z-index: 2; }}
   th:hover {{ color: #aaa; }}
-  td {{ padding: 12px 16px; border-bottom: 1px solid #1a1a1a; font-size: 13px; vertical-align: middle; }}
+  td {{ padding: 10px 16px; border-bottom: 1px solid #1a1a1a; font-size: 13px; vertical-align: middle; }}
   tr:hover td {{ background: #161616; cursor: pointer; }}
   .name {{ color: #fff; font-weight: 500; }}
+  @media (max-width: 768px) {{
+    .stats {{ grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 10px 12px 0; }}
+    .stat {{ padding: 8px; }}
+    .stat .val {{ font-size: 18px; }}
+    .stat .lbl {{ font-size: 9px; }}
+    .toolbar {{ padding: 8px 12px; }}
+    .toolbar input {{ width: 100%; }}
+    .table-wrap {{ padding: 0 8px 16px; }}
+    td, th {{ padding: 8px 6px; font-size: 11px; }}
+    .summary {{ max-width: 120px; }}
+    .modal {{ width: 95vw; padding: 16px; }}
+  }}
   .phone a {{ color: #4fc3f7; text-decoration: none; font-size: 12px; }}
   .phone a:hover {{ text-decoration: underline; }}
   .score {{ font-weight: 700; }}
@@ -226,7 +240,6 @@ def _build_html(token: str) -> str:
   .sent-dot.frustrado {{ background: #ff7043; }}
   .summary {{ font-size: 12px; color: #555; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
   .date {{ font-size: 11px; color: #555; }}
-  .table-wrap {{ overflow-x: auto; padding: 0 24px 24px; }}
   /* Modal */
   .modal-bg {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,.75); z-index: 100; align-items: center; justify-content: center; }}
   .modal-bg.open {{ display: flex; }}

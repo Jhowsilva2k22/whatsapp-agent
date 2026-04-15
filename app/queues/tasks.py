@@ -18,6 +18,7 @@ celery_app.conf.update(
         "app.queues.tasks.follow_up_cold_leads": {"queue": "messages"},
         "app.queues.tasks.nurture_customers": {"queue": "messages"},
         "app.queues.tasks.weekly_report": {"queue": "learning"},
+        "app.queues.tasks.recalculate_scores": {"queue": "learning"},
         "app.queues.tasks.nightly_learning": {"queue": "learning"},
         "app.queues.tasks.nightly_learning_all": {"queue": "learning"},
         "app.queues.tasks.learn_from_links": {"queue": "learning"},
@@ -891,3 +892,123 @@ Foque no que IMPORTA pro dono tomar decisão."""
             logger.error(f"[WeeklyReport] Erro owner {owner_id}: {e}")
 
     logger.info("[WeeklyReport] Ciclo completo")
+
+
+# ── Recalcular scores de leads existentes ────────────────────────────────────
+
+@celery_app.task(queue="learning")
+def recalculate_scores(owner_id: str):
+    """Recalcula score e status de todos os leads de um owner
+    baseado no histórico real de mensagens. Roda sob demanda."""
+    from app.database import get_db
+    from app.services.ai import AIService
+    from app.services.memory import MemoryService
+    from app.services.whatsapp import WhatsAppService
+    from app.agents.attendant import _auto_status
+
+    db = get_db()
+    ai = AIService()
+    memory = MemoryService()
+    wa = WhatsAppService()
+
+    owner = db.table("owners").select("*").eq("id", owner_id).maybe_single().execute()
+    if not owner or not owner.data:
+        logger.error(f"[Recalc] Owner {owner_id} não encontrado")
+        return
+
+    owner_data = owner.data
+    owner_phone = owner_data.get("phone", "")
+
+    # Busca todos os leads do owner
+    result = db.table("customers").select(
+        "phone,name,lead_status,lead_score,total_messages"
+    ).eq("owner_id", owner_id).execute()
+
+    leads = result.data or []
+    if not leads:
+        if owner_phone:
+            run_async(wa.send_message(owner_phone, "📊 Nenhum lead encontrado pra recalcular."))
+        return
+
+    updated = 0
+    total = len(leads)
+
+    for lead in leads:
+        phone = lead.get("phone", "")
+        if not phone:
+            continue
+
+        # Pula clientes (status manual)
+        if lead.get("lead_status") == "cliente":
+            continue
+
+        try:
+            # Busca últimas mensagens do lead (só as do usuário)
+            msgs_result = db.table("messages").select("content,role").eq(
+                "phone", phone
+            ).eq("owner_id", owner_id).eq("role", "user").order(
+                "created_at", desc=True
+            ).limit(15).execute()
+
+            user_msgs = msgs_result.data or []
+            if not user_msgs:
+                continue
+
+            # Classifica cada mensagem e acumula score
+            total_score = 0
+            sentiments = []
+            last_intent = "outros"
+            last_sentiment = "neutro"
+
+            for msg in reversed(user_msgs):  # do mais antigo pro mais novo
+                content = msg.get("content", "")
+                if not content or len(content) < 2:
+                    continue
+
+                try:
+                    classification = run_async(ai.classify_intent(content, context=""))
+                    delta = classification.get("lead_score_delta", 0)
+                    total_score += delta
+                    intent = classification.get("intent", "outros")
+                    sentiment = classification.get("sentiment", "neutro")
+                    if intent != "outros":
+                        last_intent = intent
+                    last_sentiment = sentiment
+                    sentiments.append(sentiment)
+                except Exception:
+                    continue
+
+            # Normaliza score entre 0-100
+            new_score = min(100, max(0, total_score))
+            new_status = _auto_status(lead.get("lead_status", "novo"), new_score)
+
+            # Atualiza no banco
+            update_data = {
+                "lead_score": new_score,
+                "lead_status": new_status,
+                "last_intent": last_intent,
+                "last_sentiment": last_sentiment,
+                "sentiment_history": sentiments[-10:]  # últimos 10
+            }
+            db.table("customers").update(update_data).eq(
+                "phone", phone
+            ).eq("owner_id", owner_id).execute()
+
+            updated += 1
+            name = lead.get("name") or phone
+            logger.info(f"[Recalc] {name}: score={new_score} status={new_status}")
+
+        except Exception as e:
+            logger.error(f"[Recalc] Erro {phone}: {e}")
+
+    # Notifica o dono
+    if owner_phone:
+        msg = (
+            f"✅ *Recálculo completo!*\n\n"
+            f"📊 {updated}/{total} leads atualizados\n"
+            f"Scores e status recalculados com base no histórico real.\n\n"
+            f"Acesse o painel pra ver os resultados atualizados."
+        )
+        run_async(wa.send_message(owner_phone, msg))
+
+    logger.info(f"[Recalc] Concluído: {updated}/{total} leads atualizados")

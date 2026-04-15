@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.services.whatsapp import WhatsAppService
 from app.services.memory import MemoryService
-from app.queues.tasks import process_message, process_buffered, learn_from_links, follow_up_active, weekly_report, celery_app
+from app.queues.tasks import process_message, process_buffered, learn_from_links, follow_up_active, weekly_report, recalculate_scores, celery_app
 from app.config import get_settings
 import logging
 import re
@@ -26,6 +26,7 @@ HANDOFF_ASSUME = ("assumir ", "assumindo ", "vou atender ", "atendendo ")
 HANDOFF_RESUME = ("retomar ", "retomando ", "devolver ", "bot ")
 NOTE_PREFIX    = ("nota ", "anotacao ", "anotação ")
 WELCOME_PREFIX = ("bemvindo:", "bemvindo ", "boas-vindas:", "boas-vindas ", "welcome:")
+CLIENT_PREFIX  = ("cliente ", "fechou ", "comprou ", "converteu ")
 
 @router.post("/webhook/whatsapp")
 async def receive_whatsapp(request: Request):
@@ -117,6 +118,29 @@ async def receive_whatsapp(request: Request):
                     )
                 return {"status": "welcome_updated"}
 
+        # CLIENTE: dono marca lead como cliente
+        if any(msg_lower.startswith(p) for p in CLIENT_PREFIX):
+            lead_phone = _extract_phone(msg_raw)
+            if lead_phone:
+                try:
+                    customer = await memory.get_or_create_customer(lead_phone, owner["id"])
+                    await memory.update_customer(lead_phone, owner["id"], {
+                        "lead_status": "cliente",
+                        "lead_score": max(customer.lead_score or 0, 100)
+                    })
+                    lead_name = customer.name or lead_phone
+                    await whatsapp.send_message(
+                        message.phone,
+                        f"✅ *{lead_name}* marcado como cliente!\n\n"
+                        f"O agente agora vai cuidar do relacionamento: check-in semanal, "
+                        f"aniversário e novidades relevantes."
+                    )
+                    logger.info(f"[Webhook] {lead_phone} marcado como cliente por {owner['id']}")
+                except Exception as e:
+                    logger.error(f"[Webhook] Erro ao marcar cliente: {e}")
+                    await whatsapp.send_message(message.phone, "⚠️ Erro ao marcar como cliente.")
+                return {"status": "client_marked"}
+
         # STATS: resumo rápido do dia
         if msg_lower in ("stats", "status", "resumo"):
             try:
@@ -136,6 +160,16 @@ async def receive_whatsapp(request: Request):
                 logger.error(f"[Webhook] Erro ao agendar relatório: {e}")
                 await whatsapp.send_message(message.phone, "⚠️ Erro ao gerar relatório.")
             return {"status": "report_queued"}
+
+        # RECALCULAR: recalcula scores de todos os leads
+        if msg_lower in ("recalcular", "recalcular scores", "recalcular score"):
+            try:
+                await whatsapp.send_message(message.phone, "🔄 Recalculando scores de todos os leads... pode levar alguns minutos.")
+                recalculate_scores.apply_async(args=[owner["id"]], queue="learning")
+            except Exception as e:
+                logger.error(f"[Webhook] Erro ao agendar recálculo: {e}")
+                await whatsapp.send_message(message.phone, "⚠️ Erro ao iniciar recálculo.")
+            return {"status": "recalc_queued"}
 
     # ── Bloqueia bot se lead está em atendimento humano ──────────────────────
     if sender_phone != owner_phone:
