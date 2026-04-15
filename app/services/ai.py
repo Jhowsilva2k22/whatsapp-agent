@@ -201,8 +201,15 @@ Responda APENAS o JSON."""
 
     async def compress_conversation(self, messages: list) -> str:
         text = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        prompt = f"Resuma esta conversa em maximo 150 palavras. Inclua: pontos discutidos, intencao do cliente, objecoes, onde ficou.\n\n{text}"
-        response = self.claude.messages.create(model=CLAUDE_HAIKU, max_tokens=200, messages=[{"role": "user", "content": prompt}])
+        prompt = f"""Resuma esta conversa em NO MÁXIMO 80 palavras. Texto corrido, sem markdown, sem bullet points, sem asteriscos, sem hashtags.
+
+Inclua apenas: o que o cliente quer, o que foi combinado ou ficou pendente, e o sentimento geral dele.
+
+Conversa:
+{text}
+
+Responda APENAS o resumo em texto corrido."""
+        response = self.claude.messages.create(model=CLAUDE_HAIKU, max_tokens=150, messages=[{"role": "user", "content": prompt}])
         return response.content[0].text.strip()
 
     async def analyze_owner_links(self, scraped_content: str) -> dict:

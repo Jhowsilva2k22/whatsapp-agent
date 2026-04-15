@@ -199,7 +199,14 @@ def _build_html(token: str) -> str:
   .modal .meta {{ font-size: 12px; color: #666; margin-bottom: 16px; }}
   .modal .section {{ margin-bottom: 16px; }}
   .modal .section h3 {{ font-size: 11px; text-transform: uppercase; color: #555; letter-spacing: .5px; margin-bottom: 8px; }}
-  .modal .summary-box {{ background: #111; border-radius: 8px; padding: 12px; font-size: 13px; color: #aaa; line-height: 1.6; }}
+  .modal .summary-box {{ background: #111; border-radius: 8px; padding: 16px; font-size: 13px; color: #aaa; line-height: 1.7; max-height: 200px; overflow-y: auto; }}
+  .modal .summary-box .s-label {{ display: inline-block; background: #1e2a30; color: #4fc3f7; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-bottom: 4px; margin-top: 8px; }}
+  .modal .summary-box .s-label:first-child {{ margin-top: 0; }}
+  .modal .summary-box .s-text {{ color: #ccc; margin: 4px 0 8px 0; }}
+  .modal .lead-cards {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }}
+  .modal .lead-card {{ background: #111; border: 1px solid #222; border-radius: 8px; padding: 10px 12px; }}
+  .modal .lead-card .lc-label {{ font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: .5px; }}
+  .modal .lead-card .lc-val {{ font-size: 15px; color: #fff; font-weight: 600; margin-top: 2px; }}
   .msg {{ padding: 8px 12px; border-radius: 8px; margin-bottom: 6px; font-size: 13px; line-height: 1.5; max-width: 88%; }}
   .msg.user {{ background: #1e2a30; color: #b0d4e3; align-self: flex-start; }}
   .msg.assistant {{ background: #1e2a1e; color: #a8d4aa; align-self: flex-end; margin-left: auto; }}
@@ -369,13 +376,38 @@ function renderLeads(leads) {{
   `).join('');
 }}
 
+function formatSummary(raw) {{
+  if (!raw || raw === '—') return '<em style="color:#555">Sem resumo ainda.</em>';
+  // Remove markdown noise
+  let text = raw.replace(/\*\*/g, '').replace(/##/g, '').replace(/\n- /g, '\n').trim();
+  // Quebra em blocos por "Resumo da Conversa" ou "Nota"
+  const blocks = text.split(/(?=#\s*Resumo|(?:\[Nota))/g).filter(b => b.trim());
+  if (blocks.length <= 1 && text.length < 400) return `<div class="s-text">${{text}}</div>`;
+  // Pega só os últimos 2 blocos pra não ficar enorme
+  const recent = blocks.slice(-2);
+  return recent.map((block, i) => {{
+    const isNote = block.trim().startsWith('[Nota');
+    const label = isNote ? 'Nota do dono' : (i === recent.length -1 ? 'Resumo mais recente' : 'Resumo anterior');
+    const clean = block.replace(/^#\s*Resumo da Conversa\s*/i, '').trim();
+    return `<div class="s-label">${{label}}</div><div class="s-text">${{clean.substring(0, 300)}}${{clean.length > 300 ? '...' : ''}}</div>`;
+  }}).join('');
+}}
+
 async function openLead(phone, ownerId) {{
   const lead = allLeads.find(l => l.phone === phone);
   if (!lead) return;
   document.getElementById('m-name').textContent = lead.name || phone;
-  document.getElementById('m-meta').textContent =
-    `${{phone}} · Score ${{lead.lead_score||0}} · ${{lead.channel||'canal desconhecido'}} · ${{lead.lead_status||'novo'}}`;
-  document.getElementById('m-summary').textContent = lead.summary || 'Sem resumo ainda.';
+  // Cards com info do lead
+  document.getElementById('m-meta').innerHTML = `
+    <div class="lead-cards">
+      <div class="lead-card"><div class="lc-label">Contato</div><div class="lc-val"><a href="https://wa.me/${{(phone||'').replace(/\\D/g,'')}}" target="_blank" style="color:#4fc3f7;text-decoration:none">${{phone}}</a></div></div>
+      <div class="lead-card"><div class="lc-label">Score</div><div class="lc-val" style="color:${{(lead.lead_score||0)>=70?'#ff6b35':(lead.lead_score||0)>=40?'#ffb74d':'#666'}}">${{lead.lead_score||0}}/100</div></div>
+      <div class="lead-card"><div class="lc-label">Canal</div><div class="lc-val">${{lead.channel||'desconhecido'}}</div></div>
+      <div class="lead-card"><div class="lc-label">Status</div><div class="lc-val"><span class="badge ${{lead.lead_status||'novo'}}">${{lead.lead_status||'novo'}}</span></div></div>
+      <div class="lead-card"><div class="lc-label">Mensagens</div><div class="lc-val">${{lead.total_messages||0}}</div></div>
+      <div class="lead-card"><div class="lc-label">Último contato</div><div class="lc-val" style="font-size:12px">${{fmtDate(lead.last_contact)}}</div></div>
+    </div>`;
+  document.getElementById('m-summary').innerHTML = formatSummary(lead.summary);
   document.getElementById('m-messages').innerHTML = '<em style="color:#444;font-size:12px">Carregando...</em>';
   document.getElementById('modal-bg').classList.add('open');
   const r = await fetch(`/panel/lead/${{encodeURIComponent(phone)}}/messages?token=${{TOKEN}}&owner_id=${{ownerId}}&limit=10`);
