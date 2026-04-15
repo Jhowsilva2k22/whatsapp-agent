@@ -25,6 +25,7 @@ LEARN_PREFIXES = ("aprender:", "aprender ", "configurar:", "configurar ", "link:
 HANDOFF_ASSUME = ("assumir ", "assumindo ", "vou atender ", "atendendo ")
 HANDOFF_RESUME = ("retomar ", "retomando ", "devolver ", "bot ")
 NOTE_PREFIX    = ("nota ", "anotacao ", "anotação ")
+WELCOME_PREFIX = ("bemvindo:", "bemvindo ", "boas-vindas:", "boas-vindas ", "welcome:")
 
 @router.post("/webhook/whatsapp")
 async def receive_whatsapp(request: Request):
@@ -94,6 +95,19 @@ async def receive_whatsapp(request: Request):
                 await _save_owner_note(lead_phone, owner, note_text)
                 await whatsapp.send_message(message.phone, "✅ Anotação salva no perfil do lead.")
                 return {"status": "note_saved"}
+
+        # BOAS-VINDAS: dono configura mensagem de boas-vindas
+        if any(msg_lower.startswith(p) for p in WELCOME_PREFIX):
+            welcome_text = _extract_after_prefix(msg_raw, WELCOME_PREFIX)
+            if welcome_text:
+                memory.db.table("owners").update({"welcome_message": welcome_text}).eq("id", owner["id"]).execute()
+                await whatsapp.send_message(
+                    message.phone,
+                    f"✅ Mensagem de boas-vindas atualizada!\n\n"
+                    f"Preview:\n_{welcome_text}_\n\n"
+                    f"Variáveis disponíveis: {{nome}}, {{negocio}}"
+                )
+                return {"status": "welcome_updated"}
 
     # ── Bloqueia bot se lead está em atendimento humano ──────────────────────
     if sender_phone != owner_phone:
@@ -269,6 +283,15 @@ def _extract_note(text: str) -> str:
     cleaned = re.sub(r'^(nota|anotacao|anotação)\s+', '', text.strip(), flags=re.IGNORECASE)
     cleaned = re.sub(r'^\+?[\d\s\-\(\)]{8,}\s*', '', cleaned).strip()
     return cleaned
+
+
+def _extract_after_prefix(text: str, prefixes: tuple) -> str:
+    """Remove o prefixo do texto e retorna o restante."""
+    lower = text.lower().strip()
+    for p in prefixes:
+        if lower.startswith(p):
+            return text.strip()[len(p):].strip()
+    return ""
 
 
 def _extract_urls(text: str) -> list:

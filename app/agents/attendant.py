@@ -72,6 +72,17 @@ class AttendantAgent:
         owner = await self.memory.get_owner_context(owner_id)
         if not owner:
             return
+
+        # ── Boas-vindas no primeiro contato ─────────────────────────────────
+        is_first_contact = (customer.total_messages or 0) == 0
+        welcome_msg = owner.get("welcome_message", "")
+        if is_first_contact and welcome_msg:
+            final_welcome = welcome_msg.replace("{nome}", customer.name or "")
+            final_welcome = final_welcome.replace("{negocio}", owner.get("business_name", ""))
+            await self.whatsapp.send_typing(phone, duration=len(final_welcome) * 40)
+            await self.whatsapp.send_message(phone, final_welcome)
+            await self.memory.save_turn(phone, owner_id, "assistant", final_welcome)
+
         history = await self.memory.get_conversation_history(phone, owner_id)
 
         # ── Processa mídia (mantém fluxo de texto intacto) ──────────────────

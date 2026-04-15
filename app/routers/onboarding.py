@@ -21,6 +21,7 @@ class OnboardingRequest(BaseModel):
     agent_mode: str = "both"
     handoff_threshold: int = 70
     qualification_questions: Optional[list] = None
+    welcome_message: Optional[str] = ""
 
 @router.post("/onboarding")
 async def create_owner(data: OnboardingRequest):
@@ -59,6 +60,7 @@ async def create_owner(data: OnboardingRequest):
         "notify_phone": data.notify_phone or data.phone,
         "agent_mode": data.agent_mode,
         "handoff_threshold": data.handoff_threshold,
+        "welcome_message": data.welcome_message or "",
         "links_processed": data.links,
         "qualification_questions": data.qualification_questions,
         **analysis
