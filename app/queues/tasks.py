@@ -257,64 +257,118 @@ def follow_up_active(self, phone: str, owner_id: str):
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, queue="messages")
 @with_ops_alert("follow_up_cold_leads")
-def follow_up_cold_leads(self, phone: str, owner_id: str):
-    """Envia follow-up para leads frios (não interagem há X dias)."""
+def follow_up_cold_leads(self):
+    """Envia follow-up para leads frios de TODOS os owners (chamado pelo beat sem args)."""
     try:
-        from app.services.contact import ContactService
+        from app.database import get_db
         from app.services.whatsapp import WhatsAppService
         from datetime import datetime, timedelta
 
-        contact_svc = ContactService()
+        db = get_db()
         wa_svc = WhatsAppService()
 
-        # Busca leads que não interagem há mais de 7 dias
-        cold_threshold = datetime.utcnow() - timedelta(days=7)
-        cold_leads = contact_svc.find_inactive_since(owner_id, cold_threshold)
+        # Busca todos os owners ativos
+        owners_resp = db.table("owners").select("id, whatsapp_phone_number_id").execute()
+        owners = owners_resp.data or []
 
-        if not cold_leads:
-            logger.info(f"[Follow-up Cold] Nenhum lead frio encontrado para {owner_id}")
+        if not owners:
+            logger.info("[Follow-up Cold] Nenhum owner encontrado")
             return
 
-        for lead in cold_leads:
+        cold_threshold = datetime.utcnow() - timedelta(days=7)
+
+        for owner in owners:
+            owner_id = owner["id"]
+            phone = owner.get("whatsapp_phone_number_id", "")
+            if not phone:
+                continue
+
             try:
-                msg = f"Oi {lead.first_name or lead.name}! Percebi que você não responde mais. Qual é o problema? Posso melhorar? 😔"
-                run_async(wa_svc.send_message(phone, lead.phone, msg))
-                logger.info(f"[Follow-up Cold] Enviado para {lead.phone}")
+                # Busca leads frios (última interação > 7 dias, lead_score != 'client')
+                resp = db.table("customers").select("phone, name, first_name").eq(
+                    "owner_id", owner_id
+                ).lt(
+                    "last_contact", cold_threshold.isoformat()
+                ).neq(
+                    "lead_score", "client"
+                ).limit(20).execute()
+
+                cold_leads = resp.data or []
+                if not cold_leads:
+                    continue
+
+                logger.info(f"[Follow-up Cold] {len(cold_leads)} leads frios para owner {owner_id}")
+
+                for lead in cold_leads:
+                    try:
+                        name = lead.get("first_name") or lead.get("name") or "você"
+                        msg = f"Oi {name}! Faz um tempo que não conversamos. Posso te ajudar com algo? 😊"
+                        run_async(wa_svc.send_message(phone, lead["phone"], msg))
+                        logger.info(f"[Follow-up Cold] Enviado para {lead['phone']}")
+                    except Exception as e:
+                        logger.error(f"[Follow-up Cold] Erro ao enviar para {lead.get('phone')}: {e}")
+
             except Exception as e:
-                logger.error(f"[Follow-up Cold] Erro ao enviar para {lead.phone}: {e}")
+                logger.error(f"[Follow-up Cold] Erro ao processar owner {owner_id}: {e}")
 
     except Exception as exc:
-        logger.error(f"Erro no follow-up de leads frios para {owner_id}: {exc}")
+        logger.error(f"Erro no follow-up de leads frios: {exc}")
         raise self.retry(exc=exc)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, queue="messages")
 @with_ops_alert("nurture_customers")
-def nurture_customers(self, phone: str, owner_id: str):
-    """Envia nurture messages para clientes (que já compraram)."""
+def nurture_customers(self):
+    """Envia nurture messages para clientes de TODOS os owners (chamado pelo beat sem args)."""
     try:
-        from app.services.contact import ContactService
+        from app.database import get_db
         from app.services.whatsapp import WhatsAppService
 
-        contact_svc = ContactService()
+        db = get_db()
         wa_svc = WhatsAppService()
 
-        # Busca contatos com status "customer"
-        customers = contact_svc.find_by_status(owner_id, "customer")
-        if not customers:
-            logger.info(f"[Nurture] Nenhum cliente encontrado para {owner_id}")
+        # Busca todos os owners ativos
+        owners_resp = db.table("owners").select("id, whatsapp_phone_number_id").execute()
+        owners = owners_resp.data or []
+
+        if not owners:
+            logger.info("[Nurture] Nenhum owner encontrado")
             return
 
-        for customer in customers:
+        for owner in owners:
+            owner_id = owner["id"]
+            phone = owner.get("whatsapp_phone_number_id", "")
+            if not phone:
+                continue
+
             try:
-                msg = f"Olá {customer.first_name or customer.name}! Obrigado por ser cliente! Quer conhecer nossas novidades? ✨"
-                run_async(wa_svc.send_message(phone, customer.phone, msg))
-                logger.info(f"[Nurture] Enviado para {customer.phone}")
+                # Busca clientes (lead_score = 'client')
+                resp = db.table("customers").select("phone, name, first_name").eq(
+                    "owner_id", owner_id
+                ).eq(
+                    "lead_score", "client"
+                ).limit(20).execute()
+
+                customers = resp.data or []
+                if not customers:
+                    continue
+
+                logger.info(f"[Nurture] {len(customers)} clientes para owner {owner_id}")
+
+                for customer in customers:
+                    try:
+                        name = customer.get("first_name") or customer.get("name") or "você"
+                        msg = f"Olá {name}! Obrigado por ser cliente! Quer conhecer nossas novidades? ✨"
+                        run_async(wa_svc.send_message(phone, customer["phone"], msg))
+                        logger.info(f"[Nurture] Enviado para {customer['phone']}")
+                    except Exception as e:
+                        logger.error(f"[Nurture] Erro ao enviar para {customer.get('phone')}: {e}")
+
             except Exception as e:
-                logger.error(f"[Nurture] Erro ao enviar para {customer.phone}: {e}")
+                logger.error(f"[Nurture] Erro ao processar owner {owner_id}: {e}")
 
     except Exception as exc:
-        logger.error(f"Erro no nurture de clientes para {owner_id}: {exc}")
+        logger.error(f"Erro no nurture de clientes: {exc}")
         raise self.retry(exc=exc)
 
 
@@ -437,12 +491,11 @@ def run_campaign(self, campaign_id: str):
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, queue="learning")
 @with_ops_alert("daily_backup")
 def daily_backup(self):
-    """Realiza backup diário dos dados (DB + arquivos)."""
+    """Realiza backup diário dos dados via Supabase Storage."""
     try:
-        from app.services.backup import BackupService
-        backup_svc = BackupService()
-        backup_svc.backup_everything()
-        logger.info("[Daily Backup] Backup realizado com sucesso")
+        from app.services.backup import run_backup
+        result = run_backup()
+        logger.info(f"[Daily Backup] Backup realizado com sucesso — {result.get('total_rows', 0)} registros")
 
     except Exception as exc:
         logger.error(f"Erro ao fazer backup: {exc}")
