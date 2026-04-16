@@ -47,14 +47,23 @@ settings = get_settings()
 app = FastAPI(
     title="WhatsApp AI Agent",
     description="Agente de IA para qualificacao de leads e atendimento no WhatsApp",
-    version="2.0.0",
+    version="2.1.0",
     docs_url="/docs" if settings.debug else None,
     redoc_url=None,
 )
 
+# ---------------------------------------------------------------------------
+# CORS — restrito ao domínio do painel em produção.
+# Em dev local, adicione http://localhost:3000 na env CORS_ORIGINS (comma-separated).
+# ---------------------------------------------------------------------------
+_default_origins = ["https://ecozap-panel.vercel.app"]
+_extra = os.getenv("CORS_ORIGINS", "").strip()
+if _extra:
+    _default_origins.extend([o.strip() for o in _extra.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_default_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,7 +78,7 @@ app.include_router(tenant_api.router, prefix="/api", tags=["Tenant Panel"])
 
 @app.get("/")
 async def root():
-    return {"service": "WhatsApp AI Agent", "status": "online", "version": "2.0.0"}
+    return {"service": "WhatsApp AI Agent", "status": "online", "version": "2.1.0"}
 
 
 async def _subscribe_instagram_webhook():
@@ -136,19 +145,6 @@ async def _ops_global_exc(request: Request, exc: Exception):
         pass
     logger.exception(f"Unhandled exception em {request.method} {request.url.path}")
     return JSONResponse(status_code=500, content={"error": "internal_error"})
-
-
-# ---------------------------------------------------------------------------
-# Rota de DEBUG — só pra testar o alerta end-to-end.
-# APAGAR DEPOIS DE CONFIRMAR que o alerta cai no Telegram e no Sentry.
-# Protegida por token pra não ficar exposta.
-# ---------------------------------------------------------------------------
-@app.get("/debug/raise")
-async def _debug_raise(token: str = ""):
-    if token != settings.app_secret:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=401, detail="Token inválido")
-    raise RuntimeError("teste ops — se caiu no Telegram e no Sentry, alerta OK")
 
 
 # ---------------------------------------------------------------------------
