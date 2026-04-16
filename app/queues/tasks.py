@@ -315,7 +315,7 @@ def follow_up_cold_leads(self):
         progress = get_progress("follow_up_cold_leads")
         processed_owners = set(progress.get("done", [])) if progress else set()
 
-        owners_resp = db.table("owners").select("id, whatsapp_phone_number_id").execute()
+        owners_resp = db.table("owners").select("id, phone").execute()
         owners = owners_resp.data or []
 
         if not owners:
@@ -329,7 +329,7 @@ def follow_up_cold_leads(self):
             if owner_id in processed_owners:
                 continue
 
-            phone = owner.get("whatsapp_phone_number_id", "")
+            phone = owner.get("phone", "")
             if not phone:
                 continue
 
@@ -386,7 +386,7 @@ def nurture_customers(self):
         progress = get_progress("nurture_customers")
         processed_owners = set(progress.get("done", [])) if progress else set()
 
-        owners_resp = db.table("owners").select("id, whatsapp_phone_number_id").execute()
+        owners_resp = db.table("owners").select("id, phone").execute()
         owners = owners_resp.data or []
 
         if not owners:
@@ -398,7 +398,7 @@ def nurture_customers(self):
             if owner_id in processed_owners:
                 continue
 
-            phone = owner.get("whatsapp_phone_number_id", "")
+            phone = owner.get("phone", "")
             if not phone:
                 continue
 
