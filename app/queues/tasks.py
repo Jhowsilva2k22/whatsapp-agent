@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.config import get_settings
 from urllib.parse import quote
 import asyncio
@@ -110,40 +111,44 @@ celery_app.conf.update(
         "app.queues.tasks.daily_ops_report": {"queue": "learning"},
     },
     beat_schedule={
+        # ── LEARNING: horário fixo, não reseta com deploy ──
         "nightly-learning-all": {
             "task": "app.queues.tasks.nightly_learning_all",
-            "schedule": 86400.0,
+            "schedule": crontab(hour=3, minute=0),  # 3:00 AM BRT diário
             "options": {"queue": "learning"},
         },
+        # ── MENSAGENS: intervalos curtos (ok resetar) ──
         "follow-up-cold-leads": {
             "task": "app.queues.tasks.follow_up_cold_leads",
-            "schedule": 3600.0,
+            "schedule": 3600.0,  # a cada 1h
             "options": {"queue": "messages"},
         },
         "nurture-customers": {
             "task": "app.queues.tasks.nurture_customers",
-            "schedule": 43200.0,
+            "schedule": crontab(hour="8,20", minute=0),  # 8h e 20h BRT
             "options": {"queue": "messages"},
         },
+        # ── RELATÓRIOS: horários fixos ──
         "weekly-report": {
             "task": "app.queues.tasks.weekly_report",
-            "schedule": 604800.0,
+            "schedule": crontab(hour=8, minute=0, day_of_week=1),  # segunda 8h BRT
             "options": {"queue": "learning"},
         },
+        # ── BACKUP: 4x por dia em horários fixos ──
         "daily-backup": {
             "task": "app.queues.tasks.daily_backup",
-            "schedule": 21600.0,
+            "schedule": crontab(hour="0,6,12,18", minute=0),  # 0h, 6h, 12h, 18h BRT
             "options": {"queue": "learning"},
         },
         # ── OPS: monitoramento autônomo ──
         "health-check": {
             "task": "app.queues.tasks.health_check",
-            "schedule": 1800.0,  # a cada 30 min
+            "schedule": 1800.0,  # a cada 30 min (intervalo curto, ok)
             "options": {"queue": "learning"},
         },
         "daily-ops-report": {
             "task": "app.queues.tasks.daily_ops_report",
-            "schedule": 21600.0,  # a cada 6h
+            "schedule": crontab(hour="1,7,13,19", minute=0),  # 4x ao dia em horários fixos
             "options": {"queue": "learning"},
         },
     },
