@@ -1,6 +1,7 @@
 """
 Entry point FastAPI.
 Fase 1 — Observabilidade: Sentry + alerta Telegram + health checks reais.
+Fase 2 — Multi-tenant: tenant_api router para painel do cliente.
 Preserva 100% do comportamento original (WhatsApp, Instagram, painel, onboarding).
 """
 import os
@@ -32,7 +33,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.routers import webhook, onboarding, panel, instagram_webhook, health
+from app.routers import webhook, onboarding, panel, instagram_webhook, health, tenant_api
 from app.config import get_settings
 from app.services.alerts import notify_owner, notify_boot, notify_error
 
@@ -46,7 +47,7 @@ settings = get_settings()
 app = FastAPI(
     title="WhatsApp AI Agent",
     description="Agente de IA para qualificacao de leads e atendimento no WhatsApp",
-    version="1.0.0",
+    version="2.0.0",
     docs_url="/docs" if settings.debug else None,
     redoc_url=None,
 )
@@ -63,11 +64,12 @@ app.include_router(instagram_webhook.router, tags=["Instagram"])
 app.include_router(onboarding.router, prefix="/api", tags=["Onboarding"])
 app.include_router(panel.router, tags=["Panel"])
 app.include_router(health.router, tags=["Health"])
+app.include_router(tenant_api.router, prefix="/api", tags=["Tenant Panel"])
 
 
 @app.get("/")
 async def root():
-    return {"service": "WhatsApp AI Agent", "status": "online", "version": "1.0.0"}
+    return {"service": "WhatsApp AI Agent", "status": "online", "version": "2.0.0"}
 
 
 async def _subscribe_instagram_webhook():
