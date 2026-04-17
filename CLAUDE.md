@@ -1,6 +1,6 @@
 # EcoZap — Contexto para Claude Code
 > Lido automaticamente pelo terminal Claude Code ao entrar nesta pasta.
-> Atualizado a cada sprint. Última atualização: 2026-04-16 | Commit: `8018111`
+> Atualizado a cada sprint. Última atualização: 2026-04-16 | Commit: `e964dca`
 
 ---
 
@@ -16,7 +16,7 @@ retém clientes, aprende todo dia e se auto-corrige quando algo dá errado.
 
 ---
 
-## ESTADO ATUAL — Sprint 2 concluído ✅
+## ESTADO ATUAL — Sprint 3 em andamento ✅
 
 ### O que está funcionando em produção
 - Sentinel → Doctor → Surgeon (pipeline de auto-correção a cada 5 min via Celery)
@@ -24,9 +24,11 @@ retém clientes, aprende todo dia e se auto-corrige quando algo dá errado.
 - CEO Override via Telegram (APROVADO:id / REJEITADO:id)
 - SDR + Closer + Consultant com roteamento automático via AgentService
 - QualifierAgent com prompt humanizado (NUNCA INVENTA, NUNCA REVELA)
-- Knowledge Bank — banco de conhecimento treinável por owner
+- Knowledge Bank — banco de conhecimento treinável por owner (**tabela criada no Supabase**)
 - Nightly Learning → alimenta Knowledge Bank automaticamente
-- Trainer — owner treina o bot via WhatsApp (/treinar /conhecimento /esquecer)
+- Trainer — owner treina o bot via WhatsApp (/treinar /conhecimento /esquecer) — **roteado no webhook**
+- nurture_customers — filtro corrigido (`.eq("lead_status", "cliente")`)
+- Bug 42703 eliminado — coluna `whatsapp_phone_number_id` adicionada ao Supabase
 
 ### Commits importantes
 | Commit | O que fez |
@@ -37,15 +39,16 @@ retém clientes, aprende todo dia e se auto-corrige quando algo dá errado.
 | `30d935e` | Guardian integrado ao backup + endpoint council/meeting |
 | `0a460af` | SDR + Closer + Consultant + AgentService criados |
 | `8018111` | Knowledge Bank + Trainer + SDR relacional + Nightly Learning → KB |
+| `cf3e3cd` | CLAUDE.md — contexto automático para terminal |
+| `e964dca` | Trainer no webhook + fix nurture_customers + migration Supabase |
 
 ---
 
-## PRÓXIMO SPRINT (Sprint 3)
+## PRÓXIMO SPRINT (Sprint 3 — restante)
 
-1. `app/api/webhook.py` — quando owner manda `/treinar`, `/conhecimento`, `/esquecer` → rotear para Trainer (não QualifierAgent)
-2. Teste end-to-end: lead entra → SDR → Closer → Consultant
-3. Smoke tests: Sentinel, Guardian, Knowledge Bank
-4. **Ação manual pendente:** aplicar migration `knowledge_items` no Supabase (ver `scripts/supabase_schema.sql`)
+1. Teste end-to-end: lead entra → SDR → Closer → Consultant
+2. Smoke tests: Sentinel, Guardian, Knowledge Bank
+3. Sprint 4: Painel Web (dashboard do dono)
 
 ---
 
