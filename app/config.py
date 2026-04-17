@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     openai_api_key: str = ""
     firecrawl_api_key: str = ""
+    brave_api_key: str = ""          # Brave Search API — web search autônomo
     # Meta / Instagram
     meta_app_id: str = ""
     meta_app_secret: str = ""
