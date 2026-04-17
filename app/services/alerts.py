@@ -6,6 +6,7 @@ Falha de alerta nunca pode quebrar a aplicação.
 import os
 import logging
 import httpx
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,9 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_OPS_CHAT_ID", "").strip()
 TELEGRAM_API = "https://api.telegram.org"
+
+# Fuso horário de Brasília (UTC-3, sem DST no horário de inverno)
+BRT = timezone(timedelta(hours=-3))
 
 ICONS = {
     "info": "🟢",
@@ -36,8 +40,9 @@ def notify_owner(text: str, level: str = "info") -> bool:
         logger.warning("[Ops] Telegram não configurado, alerta perdido: %s", text[:120])
         return False
 
+    now_brt = datetime.now(BRT).strftime("%d/%m %H:%M BRT")
     prefix = ICONS.get(level, "🟢")
-    body = f"{prefix} *{level.upper()}*\n\n{text}"[:3800]  # Telegram limita em 4096
+    body = f"{prefix} *{level.upper()}*\n🕐 {now_brt}\n\n{text}"[:3800]  # Telegram limita em 4096
 
     url = f"{TELEGRAM_API}/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
