@@ -75,7 +75,9 @@ class WhatsAppService:
         """Parseia qualquer tipo de mensagem do webhook da Evolution API."""
         try:
             event = payload.get("event", "")
-            if event != "messages.upsert":
+            # Evolution API pode enviar "MESSAGES_UPSERT" (uppercase) ou "messages.upsert" (lowercase)
+            # Normalizar antes de comparar para aceitar qualquer variação
+            if event.lower().replace("_", ".") != "messages.upsert":
                 return None
 
             data = payload.get("data", {})
