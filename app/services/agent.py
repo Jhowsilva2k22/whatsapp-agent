@@ -69,7 +69,6 @@ class AgentService:
         try:
             from app.agents.qualifier import QualifierAgent
             qualifier = QualifierAgent()
-            # NOTA: qualifier.process() não aceita agent_mode — não passar
             await qualifier.process(
                 phone=phone,
                 owner_id=self.owner_id,
@@ -79,6 +78,29 @@ class AgentService:
             )
         except Exception as e:
             logger.error("[AgentService] QualifierAgent falhou: %s", e, exc_info=True)
+            # Nunca deixa o lead no silêncio — envia fallback natural
+            try:
+                from app.database import get_db
+                from app.services.whatsapp import WhatsAppService
+                _db = get_db()
+                _owner_resp = (
+                    _db.table("tenants")
+                    .select("evolution_instance")
+                    .eq("id", self.owner_id)
+                    .limit(1)
+                    .execute()
+                )
+                if _owner_resp.data:
+                    _inst = (_owner_resp.data[0].get("evolution_instance") or "").strip()
+                    if _inst:
+                        _wa = WhatsAppService()
+                        await _wa.send_message(
+                            phone,
+                            "Tive um probleminha aqui, pode repetir? 😊",
+                            instance=_inst,
+                        )
+            except Exception as _fe:
+                logger.warning("[AgentService] Fallback não enviado: %s", _fe)
             return {"status": "error", "error": str(e), "agent": agent_role}
 
         # 5. Pós-processamento — busca estado atualizado do banco
@@ -119,14 +141,10 @@ class AgentService:
         return "sdr"
 
     def _effective_mode(self, agent_role: str, original_mode: str) -> str:
-        """
-        Mapeia o agente para o agent_mode do QualifierAgent.
-        O QualifierAgent usa o mode para escolher o prompt/tom certo.
-        """
         mode_map = {
-            "sdr":        "qualifier",   # qualificação padrão
-            "closer":     "closer",      # fechamento
-            "consultant": "qualifier",   # atendimento/retenção
+            "sdr":        "qualifier",
+            "closer":     "closer",
+            "consultant": "qualifier",
         }
         return mode_map.get(agent_role, original_mode)
 
@@ -142,12 +160,6 @@ class AgentService:
         old_score: int,
         old_status: str,
     ):
-        """
-        Executa ações do pipeline após a resposta:
-        - SDR → lead atingiu 50? Aciona Closer via message bus
-        - Closer → virou cliente? Aciona Consultant (onboarding)
-        - Consultant → detecta churn? Já tratado internamente
-        """
         try:
             import redis as redis_lib
             from app.agents.base import AgentContext
@@ -162,7 +174,6 @@ class AgentService:
                 payload={"phone": phone, "owner_id": owner_id},
             )
 
-            # SDR → Closer: lead cruzou o threshold
             if agent_role == "sdr" and new_score >= SCORE_CLOSER_THRESHOLD and old_score < SCORE_CLOSER_THRESHOLD:
                 logger.info("[AgentService] Lead %s passou para Closer (score %d→%d)",
                             phone[:5] + "***", old_score, new_score)
@@ -172,7 +183,6 @@ class AgentService:
                     "lead_score": new_score,
                 })
 
-            # Closer → Consultant: virou cliente
             if new_status == "cliente" and old_status != "cliente":
                 logger.info("[AgentService] Lead %s virou CLIENTE — acionando Consultant",
                             phone[:5] + "***")

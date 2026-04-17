@@ -1,6 +1,6 @@
 from app.database import get_db
 from app.models.customer import CustomerProfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import logging
 
@@ -13,13 +13,11 @@ class MemoryService:
         self.db = get_db()
 
     async def get_or_create_customer(self, phone: str, owner_id: str) -> CustomerProfile:
-        # Usa limit(1) em vez de maybe_single() para evitar 406 quando há duplicatas
         result = self.db.table("customers").select("*").eq("phone", phone).eq("owner_id", owner_id).limit(1).execute()
         if result and result.data:
             return CustomerProfile(**result.data[0])
 
-        # Novo lead — insere no banco e retorna o registro criado
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         new_data = {
             "phone": phone,
             "owner_id": owner_id,
@@ -33,11 +31,10 @@ class MemoryService:
         if insert_result and insert_result.data:
             return CustomerProfile(**insert_result.data[0])
 
-        # Fallback seguro se insert não retornar dados
         return CustomerProfile(phone=phone, owner_id=owner_id)
 
     async def update_customer(self, phone: str, owner_id: str, updates: dict):
-        updates["last_contact"] = datetime.utcnow().isoformat()
+        updates["last_contact"] = datetime.now(timezone.utc).isoformat()
         self.db.table("customers").update(updates).eq("phone", phone).eq("owner_id", owner_id).execute()
 
     async def get_conversation_history(self, phone: str, owner_id: str) -> list:
@@ -45,28 +42,21 @@ class MemoryService:
         if not result.data:
             return []
         messages = list(reversed(result.data))
-        # Filtra mensagens com conteúdo vazio — evita rejeição 400 da API do Claude/Gemini
         return [{"role": m["role"], "content": m["content"]} for m in messages if m.get("content", "").strip()]
 
     async def save_turn(self, phone: str, owner_id: str, role: str, content: str):
-        # Não salva mensagens com conteúdo vazio (ex: imagem sem legenda → display_message="")
-        # Conteúdo vazio no histórico causa rejeição 400 na API do Claude e quebra respostas futuras
         if not content or not content.strip():
             logger.warning(f"[Memory] save_turn ignorado: conteúdo vazio (phone={phone} | role={role})")
             return
         self.db.table("messages").insert({
             "phone": phone, "owner_id": owner_id,
             "role": role, "content": content,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.now(timezone.utc).isoformat()
         }).execute()
         await self._maybe_compress(phone, owner_id)
 
     async def _maybe_compress(self, phone: str, owner_id: str):
-        """Comprime histórico antigo em resumo acumulativo para economizar tokens.
-
-        IMPORTANTE: DELETE só acontece se o summary foi salvo com sucesso.
-        Antes esse bug causava perda permanente de memória quando a compressão falhava.
-        """
+        """Comprime histórico antigo em resumo acumulativo para economizar tokens."""
         result = self.db.table("messages").select("id,role,content").eq("phone", phone).eq("owner_id", owner_id).order("created_at").execute()
         if not result.data:
             return
@@ -86,19 +76,15 @@ class MemoryService:
                 customer = self.db.table("customers").select("summary").eq("phone", phone).eq("owner_id", owner_id).limit(1).execute()
                 existing = (customer.data[0].get("summary") or "") if customer and customer.data else ""
 
-                # Resumo acumulativo: preserva contexto anterior em vez de sobrescrever
-                # Antes: cada compressão descartava o histórico anterior → bot perdia memória longa
                 if existing:
                     new_summary = f"{existing}\n\n[Continuação]:\n{summary_text}"
                 else:
                     new_summary = summary_text
 
-                # Mantém notas especiais do dono (linhas que começam com [Nota)
                 notes = "\n".join(line for line in existing.split("\n") if line.strip().startswith("[Nota"))
                 if notes and notes not in new_summary:
                     new_summary = f"{new_summary}\n{notes}"
 
-                # Limita tamanho para não crescer indefinidamente
                 if len(new_summary) > MAX_SUMMARY_CHARS:
                     new_summary = new_summary[-MAX_SUMMARY_CHARS:]
 
@@ -107,8 +93,6 @@ class MemoryService:
         except Exception as e:
             logger.error(f"[Memory] Erro ao comprimir histórico: {e}")
 
-        # Só deleta mensagens antigas se o resumo foi salvo com sucesso
-        # Antes esse bug deletava mensagens mesmo quando a compressão falhava → memória perdida
         if compressed_ok:
             old_ids = [m["id"] for m in to_compress]
             self.db.table("messages").delete().in_("id", old_ids).execute()
@@ -117,12 +101,10 @@ class MemoryService:
             logger.warning(f"[Memory] Compressão falhou — mensagens preservadas para {phone}")
 
     async def get_owner_context(self, owner_id: str) -> Optional[dict]:
-        # Lê da tabela tenants (tabela owners está obsoleta/vazia)
         result = self.db.table("tenants").select("*").eq("id", owner_id).limit(1).execute()
         if not result or not result.data:
             return None
         row = dict(result.data[0])
-        # Normaliza campos para compatibilidade com os agentes
         row.setdefault("phone", row.get("owner_phone", ""))
         row.setdefault("tone", row.get("bot_tone", "amigavel"))
         row.setdefault("notify_phone", row.get("owner_phone", ""))
@@ -144,7 +126,6 @@ class MemoryService:
         "boas", "noite", "tarde", "dia",
     }
 
-    # Palavras que indicam que o bot pediu o nome na última mensagem
     _NAME_REQUEST_KEYWORDS = {
         "nome", "como te chama", "como você se chama", "como voce se chama",
         "se apresenta", "quem é você", "quem e voce", "seu nome",
@@ -155,28 +136,19 @@ class MemoryService:
 
     @staticmethod
     def _looks_like_real_name(text: str) -> bool:
-        """Heurística: verifica se o texto parece um nome próprio real.
-        Rejeita: spam de teclado, chars repetidos em excesso, sem vogais, etc.
-        """
         import re
         vowels = set("aeiouáéíóúâêîôûãõàèìòùäëïöü")
         for word in text.split():
             w = word.lower()
-            # Deve ter pelo menos uma vogal
             if not any(c in vowels for c in w):
                 return False
-            # Ratio de chars únicos vs total: mínimo 50%
             if len(w) > 3 and len(set(w)) / len(w) < 0.5:
                 return False
-            # Não pode ter 3+ chars idênticos consecutivos
             if re.search(r"(.)\1{2,}", w):
                 return False
         return True
 
     async def detect_and_save_name(self, phone: str, owner_id: str, message: str, history: list = None):
-        """Detecta nome do lead SOMENTE quando o bot já perguntou pelo nome.
-        Também valida se o texto realmente parece um nome próprio.
-        """
         if not history:
             return None
 
@@ -217,5 +189,4 @@ class MemoryService:
         return name
 
     async def set_channel(self, phone: str, owner_id: str, channel: str):
-        """Salva o canal de origem do lead (reels, anúncio, stories, etc)."""
         await self.update_customer(phone, owner_id, {"channel": channel})
