@@ -101,12 +101,12 @@ def load_all_agents():
     # Equipe de Negócio (BUSINESS)
     try:
         from app.agents.business import attendant   # noqa: F401
-        logger.info("[Registry] Attendant carregado")
+        from app.agents.business import sdr         # noqa: F401
+        from app.agents.business import closer      # noqa: F401
+        from app.agents.business import consultant  # noqa: F401
+        logger.info("[Registry] Equipe COMMERCIAL carregada (Attendant + SDR + Closer + Consultant)")
     except ImportError as e:
         logger.warning(f"[Registry] Business parcialmente carregado: {e}")
-
-    # Placeholders de negócio (futuro)
-    # from app.agents.business import sdr, closer, consultant, traffic, analyst
 
     logger.info(f"[Registry] Total de agentes registrados: {len(_REGISTRY)}")
     for info in list_registered():
