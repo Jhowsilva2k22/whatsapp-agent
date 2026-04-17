@@ -44,9 +44,15 @@ class MemoryService:
         if not result.data:
             return []
         messages = list(reversed(result.data))
-        return [{"role": m["role"], "content": m["content"]} for m in messages]
+        # Filtra mensagens com conteúdo vazio — evita rejeição 400 da API do Claude/Gemini
+        return [{"role": m["role"], "content": m["content"]} for m in messages if m.get("content", "").strip()]
 
     async def save_turn(self, phone: str, owner_id: str, role: str, content: str):
+        # Não salva mensagens com conteúdo vazio (ex: imagem sem legenda → display_message="")
+        # Conteúdo vazio no histórico causa rejeição 400 na API do Claude e quebra respostas futuras
+        if not content or not content.strip():
+            logger.warning(f"[Memory] save_turn ignorado: conteúdo vazio (phone={phone} | role={role})")
+            return
         self.db.table("messages").insert({
             "phone": phone, "owner_id": owner_id,
             "role": role, "content": content,
