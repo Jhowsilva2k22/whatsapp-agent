@@ -87,11 +87,27 @@ class WhatsAppService:
                 return None
 
             message_data = data.get("message", {})
+
+            # --- Extrai o número de telefone real ---
+            # WhatsApp com Linked Devices envia remoteJid no formato "@lid" (Linked Device ID).
+            # Nesse caso, o número real está em remoteJidAlt no formato @s.whatsapp.net.
+            remote_jid = key.get("remoteJid", "")
+            if "@lid" in remote_jid:
+                alt_jid = key.get("remoteJidAlt", "") or ""
+                if alt_jid:
+                    logger.debug(f"[Webhook] LID detectado: {remote_jid} → usando alt: {alt_jid}")
+                    remote_jid = alt_jid
+                else:
+                    # Sem alt: extrai apenas os dígitos do LID como fallback
+                    logger.warning(f"[Webhook] LID sem remoteJidAlt: {remote_jid}")
+
             phone = (
-                key.get("remoteJid", "")
+                remote_jid
                 .replace("@s.whatsapp.net", "")
                 .replace("@g.us", "")
+                .replace("@lid", "")
             )
+
             instance = payload.get("instance", "")
             message_id = key.get("id", "")
 
