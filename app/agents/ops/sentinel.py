@@ -322,8 +322,45 @@ class Sentinel(Agent):
 
     # ──────────────────── handle anomalias ────────────────────
 
+    # ────────────── tradução humana dos tipos de anomalia ─────────────
+    _HUMAN_MESSAGES = {
+        "health_timeout":        ("o sistema não respondeu em 10 segundos — pode ter travado ou caído",
+                                  "O Doctor já foi acionado para investigar. Se confirmar, o Surgeon vai preparar uma correção."),
+        "health_endpoint_error": ("o sistema retornou um erro grave quando testamos se estava funcionando",
+                                  "O Doctor vai analisar os logs agora. Você receberá o diagnóstico em breve."),
+        "health_unreachable":    ("não conseguimos nem acessar o sistema — ele pode estar fora do ar",
+                                  "O Doctor foi acionado. Se o problema persistir, você receberá um alerta para verificar o Railway."),
+        "response_time_critical":("o sistema está respondendo muito devagar — clientes podem estar esperando mais de 8 segundos",
+                                  "O Sentinel continuará monitorando. Se piorar, o Doctor entra em ação."),
+        "response_time_slow":    ("o sistema está um pouco lento — tempo de resposta acima do normal",
+                                  "Monitorando. Por enquanto não requer ação."),
+        "health_degraded":       ("o sistema sinalizou que algum componente interno não está 100%",
+                                  "O Doctor vai verificar qual parte específica está com problema."),
+        "circuit_near_open":     ("uma tarefa automática falhou várias vezes seguidas e está prestes a ser pausada",
+                                  "O Doctor vai identificar a causa. Se houver correção automática possível, o Surgeon prepara um PR."),
+        "circuit_breaker_open":  ("uma tarefa automática falhou tantas vezes que o sistema a pausou por segurança",
+                                  "O sistema está protegido, mas essa tarefa não está rodando. O Doctor já foi acionado para diagnosticar."),
+        "error_count_high":      ("uma tarefa está tendo erros repetidos — ainda não foi pausada, mas está no limite",
+                                  "Monitorando de perto. Se continuar, o Doctor entra em ação automaticamente."),
+        "celery_queue_critical": ("há muitas tarefas acumuladas esperando para executar — parece que o worker travou",
+                                  "O Doctor foi acionado para investigar se o worker precisa ser reiniciado."),
+        "celery_queue_high":     ("as filas de tarefas automáticas estão com mais trabalho do que o normal",
+                                  "Monitorando. Pode ser pico de uso. Se continuar crescendo, receberá outro alerta."),
+        "redis_check_failed":    ("não conseguimos acessar a memória interna do sistema (Redis)",
+                                  "O Doctor foi acionado. Redis é crítico — sem ele várias funções param."),
+        "celery_check_failed":   ("não conseguimos verificar as filas de tarefas automáticas",
+                                  "Verificação incompleta. Monitorando na próxima rodada."),
+    }
+
+    def _humanize_anomaly(self, anomaly: dict) -> tuple:
+        """Retorna (problema_humano, solucao_humana) para um tipo de anomalia."""
+        tipo = anomaly.get("type", "")
+        default_problema = anomaly.get("message", "algo inesperado aconteceu no sistema")
+        default_solucao = "O Doctor foi acionado para investigar."
+        return self._HUMAN_MESSAGES.get(tipo, (default_problema, default_solucao))
+
     async def _handle_anomalies(self, findings: dict, context: AgentContext):
-        """Publica evento e envia alerta Telegram."""
+        """Publica evento e envia alerta Telegram com linguagem natural."""
         anomalies = findings["anomalies"]
         critical = [a for a in anomalies if a.get("severity") == "critical"]
         warnings = [a for a in anomalies if a.get("severity") == "warning"]
@@ -343,24 +380,30 @@ class Sentinel(Agent):
         except Exception as e:
             logger.warning("[Sentinel] Falha ao publicar no message bus: %s", e)
 
-        # Alerta Telegram
+        # Alerta Telegram com linguagem natural
         try:
-            severity_icon = "🚨" if critical else "⚠️"
-            lines = [f"{severity_icon} *Sentinel — {findings['status'].upper()}*\n"]
-
             if critical:
-                lines.append("*Críticos:*")
-                for a in critical[:3]:
-                    lines.append(f"  • {a['message']}")
+                icone = "🚨"
+                titulo = "PROBLEMA CRÍTICO detectado"
+            else:
+                icone = "⚠️"
+                titulo = "Aviso — algo precisa de atenção"
 
-            if warnings:
-                lines.append("\n*Avisos:*")
-                for a in warnings[:3]:
-                    lines.append(f"  • {a['message']}")
+            linhas = [f"{icone} *Sentinel — {titulo}*\n"]
 
-            lines.append(f"\n`{findings['timestamp'][:19]}`")
+            # Mostra até 2 críticos e 2 avisos com linguagem humana
+            mostrados = (critical[:2] if critical else []) + (warnings[:2] if not critical else [])
+            for i, a in enumerate(mostrados, 1):
+                problema, solucao = self._humanize_anomaly(a)
+                linhas.append(f"*{i}. O que aconteceu:*\n{problema}")
+                linhas.append(f"*O que vem a seguir:*\n{solucao}\n")
 
-            notify_owner("\n".join(lines), level="error" if critical else "warn")
+            if len(anomalies) > 2:
+                linhas.append(f"_(+{len(anomalies) - 2} ocorrência(s) adicional(is) registrada(s))_\n")
+
+            linhas.append(f"`Detectado às {findings['timestamp'][11:19]} UTC`")
+
+            notify_owner("\n".join(linhas), level="error" if critical else "warn")
         except Exception as e:
             logger.warning("[Sentinel] Falha ao enviar Telegram: %s", e)
 

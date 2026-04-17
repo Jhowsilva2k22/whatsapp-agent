@@ -216,28 +216,39 @@ class Doctor(Agent):
         except Exception as e:
             logger.warning("[Doctor] Falha ao publicar diagnóstico: %s", e)
 
-        # 7. Alerta Telegram com diagnóstico
+        # 7. Alerta Telegram com linguagem natural
         if diagnosis["root_cause"]:
             try:
-                icon = "🚨" if diagnosis["severity"] == "critical" else "⚠️"
-                msg = (
-                    f"{icon} *Doctor — Diagnóstico #{incident_id}*\n\n"
-                    f"*Causa raiz:* {diagnosis['root_cause']}\n"
-                    f"*Severidade:* {diagnosis['severity']}\n"
-                    f"*Confiança:* {int(diagnosis['confidence'] * 100)}%\n"
-                )
-                if diagnosis["affected_files"]:
-                    files_str = "\n".join(
-                        f"  `{f['file']}:{f['line']}`"
-                        for f in diagnosis["affected_files"][:3]
-                    )
-                    msg += f"\n*Arquivos afetados:*\n{files_str}\n"
-                if diagnosis["fix_hint"]:
-                    msg += f"\n*Fix sugerido:* {diagnosis['fix_hint'][:200]}"
-                if diagnosis["ready_for_surgeon"]:
-                    msg += "\n\n_Encaminhando para Surgeon..._"
+                icon = "🩺" if diagnosis["severity"] != "critical" else "🚨"
+                confianca = int(diagnosis["confidence"] * 100)
 
-                notify_owner(msg, level="error" if diagnosis["severity"] == "critical" else "warn")
+                # Tradução humana da causa raiz
+                causa_humana = self._humanize_root_cause(
+                    diagnosis["root_cause"],
+                    diagnosis.get("root_cause_type", ""),
+                )
+                proximos_passos = self._humanize_next_steps(diagnosis)
+
+                msg_parts = [
+                    f"{icon} *Doctor — Diagnóstico #{incident_id}*\n",
+                    f"*O que encontrei:*\n{causa_humana}\n",
+                ]
+
+                if diagnosis["affected_files"]:
+                    files_str = ", ".join(
+                        f"`{f['file'].split('/')[-1]}` (linha {f['line']})"
+                        for f in diagnosis["affected_files"][:2]
+                    )
+                    msg_parts.append(f"*Onde está o problema:* {files_str}\n")
+
+                if diagnosis["fix_hint"]:
+                    msg_parts.append(f"*Como corrigir:*\n{diagnosis['fix_hint'][:250]}\n")
+
+                msg_parts.append(f"*O que acontece agora:*\n{proximos_passos}")
+                msg_parts.append(f"\n_Certeza do diagnóstico: {confianca}%_")
+
+                notify_owner("\n".join(msg_parts),
+                             level="error" if diagnosis["severity"] == "critical" else "warn")
             except Exception as e:
                 logger.warning("[Doctor] Falha ao notificar Telegram: %s", e)
 
@@ -300,6 +311,54 @@ class Doctor(Agent):
                         best = candidate
 
         return best
+
+    def _humanize_root_cause(self, root_cause: str, pattern: str) -> str:
+        """Traduz causa técnica para linguagem que qualquer pessoa entende."""
+        translations = {
+            "42703":           "O sistema tentou buscar uma informação que não existe no banco de dados. É como pedir uma coluna de uma tabela que foi renomeada ou removida.",
+            "undefined_column":"O sistema tentou buscar uma informação que não existe no banco de dados.",
+            "OperationalError":"O sistema perdeu a conexão com o banco de dados ou com um serviço externo. É como a internet caindo no meio de uma ligação.",
+            "connection refused":"Um dos serviços internos recusou a conexão — provavelmente está fora do ar ou reiniciando.",
+            "TimeoutError":    "Uma parte do sistema demorou demais para responder e o processo foi interrompido. Como ficar esperando uma resposta que não vem.",
+            "KeyError":        "O sistema esperava receber uma informação específica, mas ela não veio — pode ser que o formato de resposta de uma API mudou.",
+            "JSONDecodeError": "O sistema recebeu uma resposta que não estava no formato esperado — como receber um texto quando esperava uma planilha.",
+            "rate limit":      "Atingimos o limite de chamadas permitidas em uma API externa por um período. O sistema está fazendo muitas requisições seguidas.",
+            "MemoryError":     "O servidor ficou sem memória para processar as tarefas. É como um computador travando por ter muitos programas abertos.",
+            "SyntaxError":     "Um erro de código foi publicado em produção — há um trecho de código com escrita incorreta.",
+            "ImportError":     "O sistema não encontrou um módulo ou biblioteca necessária para funcionar.",
+            "duplicate key":   "O sistema tentou salvar uma informação que já existe no banco de dados.",
+        }
+
+        # Busca match parcial
+        root_lower = root_cause.lower()
+        pattern_lower = pattern.lower()
+        for key, human in translations.items():
+            if key.lower() in root_lower or key.lower() in pattern_lower:
+                return human
+
+        # Fallback: usa a causa original com uma introdução
+        return f"O sistema identificou o seguinte problema: {root_cause}"
+
+    def _humanize_next_steps(self, diagnosis: dict) -> str:
+        """Explica o que acontece depois do diagnóstico."""
+        if diagnosis["ready_for_surgeon"]:
+            if diagnosis["needs_ceo_override"]:
+                return (
+                    "O Surgeon já está preparando uma correção automática. "
+                    "Quando estiver pronta, você receberá um pedido de aprovação no Telegram. "
+                    "É só responder APROVADO ou REJEITADO — sem precisar mexer em nenhum código."
+                )
+            else:
+                return (
+                    "O Surgeon vai preparar e enviar uma correção. "
+                    "Você receberá um aviso quando o Pull Request (proposta de correção) estiver pronto para revisão."
+                )
+        else:
+            return (
+                "O problema foi identificado mas não é possível corrigir automaticamente com segurança. "
+                "Você precisará verificar manualmente ou acionar um desenvolvedor. "
+                "Todas as informações estão registradas para facilitar a análise."
+            )
 
     def _extract_files_from_traceback(self, traceback_text: str) -> list:
         """Extrai pares (arquivo, linha) do traceback Python."""

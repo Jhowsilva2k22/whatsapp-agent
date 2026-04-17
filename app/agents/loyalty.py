@@ -121,24 +121,60 @@ class AuditLog:
 
 # ─── CEO Override Request ─────────────────────────────────────────────────────
 
-def format_override_request(agent_role: str, action: str, reason: str, context: dict = None) -> str:
+def format_override_request(
+    agent_role: str,
+    action: str,
+    reason: str,
+    requested_by: str = None,
+    incident_id: str = None,
+    extra: dict = None,
+    context: dict = None,
+) -> str:
     """
-    Formata mensagem de solicitação de CEO_OVERRIDE para envio via Telegram.
-    O CEO responde 'APROVADO: {action}' para confirmar.
+    Formata pedido de aprovação do CEO em linguagem natural e clara.
+    O CEO responde APROVADO:{incident_id} ou REJEITADO:{incident_id}.
     """
-    ctx_summary = ""
-    if context:
-        ctx_items = [f"  • {k}: {v}" for k, v in list(context.items())[:5]]
-        ctx_summary = "\n" + "\n".join(ctx_items)
+    agente_nome = {
+        "surgeon": "Surgeon (agente de correções automáticas)",
+        "sentinel": "Sentinel (agente de monitoramento)",
+        "doctor": "Doctor (agente de diagnóstico)",
+        "guardian": "Guardian (agente de backup)",
+    }.get(requested_by or agent_role, agent_role)
+
+    acao_humana = {
+        "merge_to_main":            "aplicar a correção ao código principal e fazer o redeploy",
+        "deploy_to_production":     "publicar uma nova versão em produção",
+        "alter_database_schema":    "alterar a estrutura do banco de dados",
+        "broadcast_to_all_customers": "enviar mensagem para todos os clientes",
+        "delete_data":              "apagar dados do sistema",
+        "change_pricing":           "alterar preços ou planos",
+        "create_new_service":       "criar um novo serviço no servidor",
+        "modify_auth_config":       "alterar configurações de segurança e autenticação",
+        "spend_above_quota":        "realizar um gasto acima do limite configurado",
+        "execute_financial_transaction": "executar uma transação financeira",
+    }.get(action, action)
+
+    incident_ref = f"#{incident_id}" if incident_id else ""
+    codigo_aprovacao = f"APROVADO:{incident_id}" if incident_id else f"APROVADO:{action}"
+    codigo_rejeicao = f"REJEITADO:{incident_id}" if incident_id else f"REJEITADO:{action}"
+
+    # Info extra (arquivo corrigido, PR URL, etc.)
+    extra_lines = ""
+    if extra:
+        if extra.get("arquivo_corrigido"):
+            extra_lines += f"\n*Arquivo alterado:* `{extra['arquivo_corrigido']}`"
+        if extra.get("pr_url"):
+            extra_lines += f"\n*Ver a correção completa:* {extra['pr_url']}"
 
     return (
-        f"🔐 *CEO OVERRIDE SOLICITADO*\n\n"
-        f"*Agente:* {agent_role}\n"
-        f"*Ação:* `{action}`\n"
-        f"*Motivo:* {reason}"
-        f"{ctx_summary}\n\n"
-        f"Para aprovar, responda:\n"
-        f"`APROVADO: {action}`\n\n"
-        f"Para rejeitar:\n"
-        f"`REJEITADO: {action}`"
+        f"🔐 *Sua aprovação é necessária {incident_ref}*\n\n"
+        f"*Quem está pedindo:* {agente_nome}\n\n"
+        f"*O que quer fazer:* {acao_humana}\n\n"
+        f"*Por que:*\n{reason}"
+        f"{extra_lines}\n\n"
+        f"Se você *aprovar,* a ação será executada automaticamente — "
+        f"sem precisar mexer em nada.\n"
+        f"Se você *rejeitar,* tudo fica como está e o incidente é registrado para análise manual.\n\n"
+        f"👉 *Para aprovar, responda:*\n`{codigo_aprovacao}`\n\n"
+        f"👉 *Para rejeitar, responda:*\n`{codigo_rejeicao}`"
     )

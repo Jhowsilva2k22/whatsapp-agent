@@ -159,16 +159,17 @@ class Surgeon(Agent):
                 result["pr_url"] = pr_url
                 result["awaiting_ceo_approval"] = True
 
-                # 5. Solicita CEO_OVERRIDE via Telegram
+                # 5. Solicita CEO_OVERRIDE via Telegram com linguagem natural
+                arquivo_nome = target_file.split("/")[-1] if target_file else "arquivo do sistema"
                 override_msg = format_override_request(
                     action="merge_to_main",
-                    reason=(
-                        f"Patch automático para: {root_cause}.\n"
-                        f"Arquivo: {target_file}\n"
-                        f"PR: {pr_url}"
-                    ),
+                    reason=root_cause,
                     requested_by=self.role,
                     incident_id=incident_id,
+                    extra={
+                        "arquivo_corrigido": arquivo_nome,
+                        "pr_url": pr_url,
+                    }
                 )
                 try:
                     notify_owner(override_msg, level="warn")
@@ -179,15 +180,20 @@ class Surgeon(Agent):
             else:
                 result["error"] = "Falha ao criar PR no GitHub"
         else:
-            # Sem GitHub token — reporta patch em texto puro
+            # Sem GitHub token — reporta patch em texto puro com linguagem natural
             logger.info("[Surgeon] Sem GITHUB_TOKEN. Patch gerado mas não enviado ao repositório.")
             try:
+                arquivo_nome = target_file.split("/")[-1] if target_file else "não identificado"
                 notify_owner(
-                    f"🔧 *Surgeon — Patch Gerado #{incident_id}*\n\n"
-                    f"*Causa:* {root_cause}\n"
-                    f"*Arquivo:* `{target_file or 'não identificado'}`\n\n"
-                    f"*Patch sugerido:*\n```python\n{patch_code[:800]}\n```\n\n"
-                    f"_Configure GITHUB\\_TOKEN para criação automática de PR._",
+                    f"🔧 *Surgeon — Correção Preparada #{incident_id}*\n\n"
+                    f"*O problema:*\n{root_cause}\n\n"
+                    f"*Arquivo que precisa ser alterado:* `{arquivo_nome}`\n\n"
+                    f"*A correção foi escrita,* mas não foi enviada automaticamente ao repositório "
+                    f"porque o GITHUB\\_TOKEN ainda não está configurado.\n\n"
+                    f"*O que fazer:* Configure a variável `GITHUB\\_TOKEN` no Railway e "
+                    f"na próxima ocorrência o Surgeon criará o Pull Request automaticamente, "
+                    f"precisando só da sua aprovação.\n\n"
+                    f"_Prévia do código corrigido:_\n```python\n{patch_code[:600]}\n```",
                     level="warn",
                 )
             except Exception:
@@ -427,13 +433,17 @@ class Surgeon(Agent):
             return None
 
     async def _notify_blocked(self, incident_id: str, root_cause: str, reason: str):
-        """Notifica Telegram que cirurgia foi bloqueada."""
+        """Notifica que a correção automática não foi possível — linguagem natural."""
         try:
             notify_owner(
-                f"🛑 *Surgeon — Cirurgia Bloqueada #{incident_id}*\n\n"
-                f"*Causa do incidente:* {root_cause}\n"
-                f"*Motivo do bloqueio:* {reason}\n\n"
-                f"_Intervenção manual necessária._",
+                f"🛑 *Surgeon — Correção Automática Não Foi Possível #{incident_id}*\n\n"
+                f"*Problema identificado:*\n{root_cause}\n\n"
+                f"*Por que não corrigiu automaticamente:*\n{reason}\n\n"
+                f"*O que você precisa fazer:*\n"
+                f"Esse problema precisa de atenção manual. "
+                f"Você pode entrar no Railway, verificar os logs do serviço afetado, "
+                f"ou acionar um desenvolvedor com o número do incidente `#{incident_id}` — "
+                f"todas as informações de diagnóstico foram registradas.",
                 level="error",
             )
         except Exception:
