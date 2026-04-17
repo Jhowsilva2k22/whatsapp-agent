@@ -579,20 +579,27 @@ def nightly_learning_all(self):
 @with_ops_alert("daily_web_search")
 def daily_web_search(self):
     """
-    Busca autônoma diária — mantém os agentes atualizados com tendências de mercado.
+    Busca autônoma diária — cada agente aprende sua especialidade.
     Roda todo dia às 6h BRT, logo após o nightly_learning_all das 3h.
 
     Fluxo:
       1. Lê todos os tenants ativos
-      2. Para cada tenant: chama WebSearchService.search_and_learn()
-      3. Resultados salvos no knowledge_items como category='aprendizado'
+      2. Para cada tenant × cada role: chama WebSearchService.search_and_learn(role=role)
+      3. Resultados salvos no knowledge_items com tag do role:
+         [SDR: prospecção ativa WhatsApp...]
+         [Closer: técnicas fechamento vendas...]
+         [Ops/Infra: Evolution API instabilidades...]
+
+    Capacidade Brave Free (2.000 buscas/mês ≈ 66/dia):
+      7 roles × ~3 tópicos = ~21 calls/tenant/dia
+      Comporta até 3 tenants simultâneos com folga.
 
     Requisito: BRAVE_API_KEY configurada no Railway env.
     Sem a chave, a task executa mas não faz buscas (aviso no log).
     """
     try:
         from app.database import get_db
-        from app.services.web_search import WebSearchService
+        from app.services.web_search import WebSearchService, TOPICS_BY_ROLE
 
         db = get_db()
         resp = db.table("tenants").select("id").execute()
@@ -603,19 +610,38 @@ def daily_web_search(self):
             return
 
         svc = WebSearchService()
+        roles = list(TOPICS_BY_ROLE.keys())
         total_saved = 0
 
-        logger.info("[WebSearch] Iniciando ciclo diário para %d tenant(s)", len(all_owners))
+        logger.info(
+            "[WebSearch] Iniciando ciclo diário — %d tenant(s) × %d roles",
+            len(all_owners),
+            len(roles),
+        )
 
         for owner_id in all_owners:
-            try:
-                saved = svc.search_and_learn(owner_id)
-                total_saved += saved
-            except Exception as e:
-                logger.error("[WebSearch] Erro no tenant %s: %s", owner_id[:8], e)
+            tenant_saved = 0
+            for role in roles:
+                try:
+                    saved = svc.search_and_learn(owner_id, role=role)
+                    tenant_saved += saved
+                    total_saved += saved
+                except Exception as e:
+                    logger.error(
+                        "[WebSearch] Erro no tenant %s role=%s: %s",
+                        owner_id[:8],
+                        role,
+                        e,
+                    )
+            logger.info(
+                "[WebSearch] Tenant %s concluído — %d insights salvos (%d roles)",
+                owner_id[:8],
+                tenant_saved,
+                len(roles),
+            )
 
         logger.info(
-            "[WebSearch] Ciclo diário concluído — %d insights salvos em %d tenant(s)",
+            "[WebSearch] Ciclo diário concluído — %d insights totais em %d tenant(s)",
             total_saved,
             len(all_owners),
         )
