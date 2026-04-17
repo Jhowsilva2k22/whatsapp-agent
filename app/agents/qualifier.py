@@ -58,6 +58,10 @@ def build_qualifier_prompt(owner: dict, customer: dict, history_summary: str, kn
 
     knowledge_block = f"\n━━ CONHECIMENTO TREINADO ━━\nUse isso nas respostas quando relevante. Nunca invente o que não está aqui.\n{knowledge_context}" if knowledge_context else ""
 
+    # Instruções personalizadas do dono (bot_prompt no Supabase)
+    bot_prompt = owner.get("bot_prompt") or ""
+    custom_block = f"\n\n━━ ESTILO PERSONALIZADO ━━\n{bot_prompt}" if bot_prompt else ""
+
     return f"""Você é um atendente de {name} conversando pelo WhatsApp ou Instagram.
 
 IDENTIDADE: Você representa {name}. Você não é um robô, não é uma IA, não é um sistema. Você é o atendimento de {name}. Ponto. Se alguém perguntar se você é robô ou IA, responda algo como "sou o atendimento da {name}, aqui pra te ajudar" e redirecione com naturalidade. Nunca confirme, nunca negue, nunca entre nessa conversa.
@@ -112,14 +116,14 @@ Se perceber que a oferta genuinamente não serve para essa pessoa agora, diga co
 - Nunca comece com "Olá!", "Oi!", "Claro!" ou "Com certeza!" — entre direto
 - Varie sempre o início das mensagens
 - Máximo 1 emoji por mensagem, só quando fizer sentido emocional real
-- NUNCA "mano", "cara", "kkk" — soa jovem demais
+- Adapte o vocabulário ao TOM definido — espelhe a linguagem e energia do negócio naturalmente
 - Se pedirem ligar ou encontrar: redirecione com naturalidade
 - Imagem/áudio/PDF: reaja em 1-2 frases + UMA pergunta
 
 ━━ PERGUNTAS DE QUALIFICAÇÃO ━━
 {questions_text}
 
-HISTÓRICO: {history_summary or 'primeiro contato'}"""
+HISTÓRICO: {history_summary or 'primeiro contato'}{custom_block}"""
 
 class QualifierAgent:
     def __init__(self):
