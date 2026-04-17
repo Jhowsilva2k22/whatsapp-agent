@@ -447,8 +447,9 @@ async def receive_whatsapp(request: Request):
 
         if sender_phone != owner_phone:
             fu_task_key = f"followup_task:{message.phone}:{owner['id']}"
+            # BUG CORRIGIDO: follow_up_active aceita apenas phone e owner_id
             fu_result = follow_up_active.apply_async(
-                args=[message.phone, owner["id"], 1],
+                args=[message.phone, owner["id"]],
                 countdown=300,
                 queue="messages"
             )
