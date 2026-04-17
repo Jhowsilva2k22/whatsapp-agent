@@ -16,8 +16,13 @@ class WhatsAppService:
             "Content-Type": "application/json",
         }
 
-    async def send_message(self, phone: str, text: str) -> dict:
-        url = f"{self.base_url}/message/sendText/{self.settings.evolution_instance}"
+    def _instance(self, instance: str = None) -> str:
+        """Retorna a instância correta: a do owner (multi-tenant) ou a padrão do env."""
+        return instance or self.settings.evolution_instance
+
+    async def send_message(self, phone: str, text: str, instance: str = None) -> dict:
+        inst = self._instance(instance)
+        url = f"{self.base_url}/message/sendText/{inst}"
         phone = self._format_phone(phone)
         payload = {"number": phone, "text": text, "delay": 1200}
         async with httpx.AsyncClient(timeout=30) as client:
@@ -26,11 +31,12 @@ class WhatsAppService:
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPError as e:
-                logger.error(f"Erro ao enviar mensagem para {phone}: {e}")
+                logger.error(f"Erro ao enviar mensagem para {phone} via {inst}: {e}")
                 raise
 
-    async def send_typing(self, phone: str, duration: int = 3000):
-        url = f"{self.base_url}/chat/sendPresence/{self.settings.evolution_instance}"
+    async def send_typing(self, phone: str, duration: int = 3000, instance: str = None):
+        inst = self._instance(instance)
+        url = f"{self.base_url}/chat/sendPresence/{inst}"
         phone = self._format_phone(phone)
         payload = {"number": phone, "presence": "composing", "delay": duration}
         async with httpx.AsyncClient(timeout=10) as client:
@@ -39,10 +45,10 @@ class WhatsAppService:
             except Exception:
                 pass
 
-    async def download_media_base64(self, message_id: str, phone: str = "") -> str | None:
+    async def download_media_base64(self, message_id: str, phone: str = "", instance: str = None) -> str | None:
         """Baixa mídia de uma mensagem via Evolution API e retorna base64."""
-        url = f"{self.base_url}/chat/getBase64FromMediaMessage/{self.settings.evolution_instance}"
-        # Monta key completa — Evolution API v2 precisa de remoteJid + fromMe + id
+        inst = self._instance(instance)
+        url = f"{self.base_url}/chat/getBase64FromMediaMessage/{inst}"
         key: dict = {"id": message_id, "fromMe": False}
         if phone:
             raw = phone.replace("+", "").replace("-", "").replace(" ", "").replace("@s.whatsapp.net", "")
@@ -51,10 +57,9 @@ class WhatsAppService:
         async with httpx.AsyncClient(timeout=30) as client:
             try:
                 response = await client.post(url, json=payload, headers=self.headers)
-                logger.info(f"[Media] status={response.status_code} id={message_id} phone={phone}")
+                logger.info(f"[Media] status={response.status_code} id={message_id} phone={phone} inst={inst}")
                 if response.status_code in (200, 201):
                     data = response.json()
-                    # Tenta diferentes estruturas de resposta da Evolution API
                     b64 = data.get("base64") or data.get("data", {}).get("base64")
                     if b64:
                         logger.info(f"[Media] download OK id={message_id} bytes={len(b64)}")
@@ -96,11 +101,8 @@ class WhatsAppService:
             )
             if conversation:
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
-                    message=conversation,
-                    message_id=message_id,
-                    media_type="text",
+                    instance=instance, phone=phone, message=conversation,
+                    message_id=message_id, media_type="text",
                 )
 
             # --- IMAGEM ---
@@ -109,22 +111,17 @@ class WhatsAppService:
                 caption = img.get("caption") or ""
                 text = f"[Imagem]{': ' + caption if caption else ' recebida'}"
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
-                    message=text,
-                    message_id=message_id,
-                    media_type="image",
+                    instance=instance, phone=phone, message=text,
+                    message_id=message_id, media_type="image",
                 )
 
             # --- ÁUDIO / PTT ---
             audio = message_data.get("audioMessage") or message_data.get("pttMessage")
             if audio:
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
+                    instance=instance, phone=phone,
                     message="[Áudio recebido - por favor, escreva sua mensagem em texto]",
-                    message_id=message_id,
-                    media_type="audio",
+                    message_id=message_id, media_type="audio",
                 )
 
             # --- VÍDEO ---
@@ -133,11 +130,8 @@ class WhatsAppService:
                 caption = video.get("caption") or ""
                 text = f"[Vídeo]{': ' + caption if caption else ' recebido'}"
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
-                    message=text,
-                    message_id=message_id,
-                    media_type="video",
+                    instance=instance, phone=phone, message=text,
+                    message_id=message_id, media_type="video",
                 )
 
             # --- DOCUMENTO / PDF ---
@@ -154,21 +148,15 @@ class WhatsAppService:
                 if caption:
                     text += f" {caption}"
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
-                    message=text,
-                    message_id=message_id,
-                    media_type="document",
+                    instance=instance, phone=phone, message=text,
+                    message_id=message_id, media_type="document",
                 )
 
             # --- STICKER ---
             if message_data.get("stickerMessage"):
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
-                    message="[Sticker 😄]",
-                    message_id=message_id,
-                    media_type="sticker",
+                    instance=instance, phone=phone, message="[Sticker 😄]",
+                    message_id=message_id, media_type="sticker",
                 )
 
             # --- LOCALIZAÇÃO ---
@@ -179,11 +167,8 @@ class WhatsAppService:
                 lng = loc.get("degreesLongitude", "")
                 text = f"[Localização{': ' + name if name else ''} ({lat},{lng})]"
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
-                    message=text,
-                    message_id=message_id,
-                    media_type="location",
+                    instance=instance, phone=phone, message=text,
+                    message_id=message_id, media_type="location",
                 )
 
             # --- CONTATO ---
@@ -191,11 +176,9 @@ class WhatsAppService:
             if contact:
                 display = contact.get("displayName") or "contato"
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
+                    instance=instance, phone=phone,
                     message=f"[Contato compartilhado: {display}]",
-                    message_id=message_id,
-                    media_type="contact",
+                    message_id=message_id, media_type="contact",
                 )
 
             # --- REAÇÃO ---
@@ -203,11 +186,9 @@ class WhatsAppService:
             if reaction:
                 emoji = reaction.get("text") or "👍"
                 return IncomingMessage(
-                    instance=instance,
-                    phone=phone,
+                    instance=instance, phone=phone,
                     message=f"[Reagiu com {emoji}]",
-                    message_id=message_id,
-                    media_type="reaction",
+                    message_id=message_id, media_type="reaction",
                 )
 
             logger.debug(f"Tipo de mensagem não mapeado: {list(message_data.keys())}")
