@@ -296,10 +296,10 @@ def follow_up_active(self, phone: str, owner_id: str):
             logger.info(f"[Follow-up Active] Nenhum contato ativo hoje para {owner_id}")
             return
 
-        # Busca evolution_instance do owner para envio correto (multi-tenant)
+        # Busca evolution_instance do tenant para envio correto (multi-tenant)
         db = get_db()
-        owner_resp = db.table("owners").select("evolution_instance").eq("id", owner_id).single().execute()
-        evolution_instance = (owner_resp.data or {}).get("evolution_instance", "")
+        owner_resp = db.table("tenants").select("evolution_instance").eq("id", owner_id).limit(1).execute()
+        evolution_instance = (owner_resp.data[0] if owner_resp and owner_resp.data else {}).get("evolution_instance", "")
 
         for contact in active_contacts:
             try:
@@ -317,7 +317,7 @@ def follow_up_active(self, phone: str, owner_id: str):
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, queue="messages")
 @with_ops_alert("follow_up_cold_leads")
 def follow_up_cold_leads(self):
-    """Follow-up de leads frios — itera todos os owners (beat sem args)."""
+    """Follow-up de leads frios — itera todos os tenants (beat sem args)."""
     try:
         from app.database import get_db
         from app.services.whatsapp import WhatsAppService
@@ -331,12 +331,16 @@ def follow_up_cold_leads(self):
         progress = get_progress("follow_up_cold_leads")
         processed_owners = set(progress.get("done", [])) if progress else set()
 
-        # Inclui evolution_instance para envio multi-tenant correto
-        owners_resp = db.table("owners").select("id, phone, evolution_instance").execute()
-        owners = owners_resp.data or []
+        # Lê da tabela tenants (owners está vazia/obsoleta)
+        owners_resp = db.table("tenants").select("id, owner_phone, evolution_instance").execute()
+        owners = []
+        for row in (owners_resp.data or []):
+            r = dict(row)
+            r.setdefault("phone", r.get("owner_phone", ""))
+            owners.append(r)
 
         if not owners:
-            logger.info("[Follow-up Cold] Nenhum owner encontrado")
+            logger.info("[Follow-up Cold] Nenhum tenant encontrado")
             return
 
         cold_threshold = datetime.utcnow() - timedelta(days=7)
@@ -348,7 +352,7 @@ def follow_up_cold_leads(self):
 
             evolution_instance = owner.get("evolution_instance", "")
             if not evolution_instance:
-                logger.warning(f"[Follow-up Cold] Owner {owner_id} sem evolution_instance — pulando")
+                logger.warning(f"[Follow-up Cold] Tenant {owner_id} sem evolution_instance — pulando")
                 processed_owners.add(owner_id)
                 save_progress("follow_up_cold_leads", {"done": list(processed_owners)})
                 continue
@@ -368,7 +372,7 @@ def follow_up_cold_leads(self):
                     save_progress("follow_up_cold_leads", {"done": list(processed_owners)})
                     continue
 
-                logger.info(f"[Follow-up Cold] {len(cold_leads)} leads frios para owner {owner_id}")
+                logger.info(f"[Follow-up Cold] {len(cold_leads)} leads frios para tenant {owner_id}")
 
                 for lead in cold_leads:
                     try:
@@ -382,7 +386,7 @@ def follow_up_cold_leads(self):
                 save_progress("follow_up_cold_leads", {"done": list(processed_owners)})
 
             except Exception as e:
-                logger.error(f"[Follow-up Cold] Erro ao processar owner {owner_id}: {e}")
+                logger.error(f"[Follow-up Cold] Erro ao processar tenant {owner_id}: {e}")
 
         clear_progress("follow_up_cold_leads")
 
@@ -394,7 +398,7 @@ def follow_up_cold_leads(self):
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, queue="messages")
 @with_ops_alert("nurture_customers")
 def nurture_customers(self):
-    """Nurture de clientes — itera todos os owners (beat sem args)."""
+    """Nurture de clientes — itera todos os tenants (beat sem args)."""
     try:
         from app.database import get_db
         from app.services.whatsapp import WhatsAppService
@@ -406,12 +410,16 @@ def nurture_customers(self):
         progress = get_progress("nurture_customers")
         processed_owners = set(progress.get("done", [])) if progress else set()
 
-        # Inclui evolution_instance para envio multi-tenant correto
-        owners_resp = db.table("owners").select("id, phone, evolution_instance").execute()
-        owners = owners_resp.data or []
+        # Lê da tabela tenants (owners está vazia/obsoleta)
+        owners_resp = db.table("tenants").select("id, owner_phone, evolution_instance").execute()
+        owners = []
+        for row in (owners_resp.data or []):
+            r = dict(row)
+            r.setdefault("phone", r.get("owner_phone", ""))
+            owners.append(r)
 
         if not owners:
-            logger.info("[Nurture] Nenhum owner encontrado")
+            logger.info("[Nurture] Nenhum tenant encontrado")
             return
 
         for owner in owners:
@@ -421,7 +429,7 @@ def nurture_customers(self):
 
             evolution_instance = owner.get("evolution_instance", "")
             if not evolution_instance:
-                logger.warning(f"[Nurture] Owner {owner_id} sem evolution_instance — pulando")
+                logger.warning(f"[Nurture] Tenant {owner_id} sem evolution_instance — pulando")
                 processed_owners.add(owner_id)
                 save_progress("nurture_customers", {"done": list(processed_owners)})
                 continue
@@ -439,7 +447,7 @@ def nurture_customers(self):
                     save_progress("nurture_customers", {"done": list(processed_owners)})
                     continue
 
-                logger.info(f"[Nurture] {len(customers)} clientes para owner {owner_id}")
+                logger.info(f"[Nurture] {len(customers)} clientes para tenant {owner_id}")
 
                 for customer in customers:
                     try:
@@ -453,7 +461,7 @@ def nurture_customers(self):
                 save_progress("nurture_customers", {"done": list(processed_owners)})
 
             except Exception as e:
-                logger.error(f"[Nurture] Erro ao processar owner {owner_id}: {e}")
+                logger.error(f"[Nurture] Erro ao processar tenant {owner_id}: {e}")
 
         clear_progress("nurture_customers")
 
@@ -531,16 +539,16 @@ def nightly_learning_all(self):
         progress = get_progress("nightly_learning_all")
         done_ids = set(progress.get("done", [])) if progress else set()
 
-        # Busca todos os owners do Supabase
+        # Lê da tabela tenants (owners está vazia/obsoleta)
         from app.database import get_db
         db = get_db()
-        resp = db.table("owners").select("id").execute()
+        resp = db.table("tenants").select("id").execute()
         all_owners = [row["id"] for row in (resp.data or [])]
 
         from app.services.learning import LearningService
         learning_svc = LearningService()
 
-        logger.info(f"[Nightly Learning All] Processando {len(all_owners)} owner(s), {len(done_ids)} já feitos")
+        logger.info(f"[Nightly Learning All] Processando {len(all_owners)} tenant(s), {len(done_ids)} já feitos")
 
         for oid in all_owners:
             if oid in done_ids:
