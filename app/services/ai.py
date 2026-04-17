@@ -27,21 +27,34 @@ class AIService:
         else:
             self.openai = None
 
-    async def respond(self, system_prompt: str, history: list, user_message: str, use_gemini: bool = False) -> str:
+    async def respond(self, system_prompt: str, history: list, user_message: str, use_gemini: bool = False) -> str | None:
         if use_gemini and self.gemini:
             return await self._respond_gemini(system_prompt, history, user_message)
         return await self._respond_claude(system_prompt, history, user_message)
 
-    async def _respond_claude(self, system_prompt: str, history: list, user_message: str) -> str:
-        messages = history + [{"role": "user", "content": user_message}]
-        response = self.claude.messages.create(model=CLAUDE_SONNET, max_tokens=MAX_RESPONSE_TOKENS, system=system_prompt, messages=messages)
-        return response.content[0].text.strip()
+    async def _respond_claude(self, system_prompt: str, history: list, user_message: str) -> str | None:
+        try:
+            messages = history + [{"role": "user", "content": user_message}]
+            response = self.claude.messages.create(
+                model=CLAUDE_SONNET,
+                max_tokens=MAX_RESPONSE_TOKENS,
+                system=system_prompt,
+                messages=messages
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.error(f"[Claude] erro em _respond_claude: {e}")
+            return None
 
-    async def _respond_gemini(self, system_prompt: str, history: list, user_message: str) -> str:
-        chat_history = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in history]
-        chat = self.gemini.start_chat(history=chat_history)
-        response = chat.send_message(f"{system_prompt}\n\nMensagem: {user_message}")
-        return response.text.strip()
+    async def _respond_gemini(self, system_prompt: str, history: list, user_message: str) -> str | None:
+        try:
+            chat_history = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in history]
+            chat = self.gemini.start_chat(history=chat_history)
+            response = chat.send_message(f"{system_prompt}\n\nMensagem: {user_message}")
+            return response.text.strip()
+        except Exception as e:
+            logger.error(f"[Gemini] erro em _respond_gemini: {e} — tentando Claude como fallback")
+            return await self._respond_claude(system_prompt, history, user_message)
 
     async def classify_intent(self, message: str, context: str = "") -> dict:
         prompt = f"""Analise esta mensagem de WhatsApp e retorne um JSON com:
