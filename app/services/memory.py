@@ -12,9 +12,10 @@ class MemoryService:
         self.db = get_db()
 
     async def get_or_create_customer(self, phone: str, owner_id: str) -> CustomerProfile:
-        result = self.db.table("customers").select("*").eq("phone", phone).eq("owner_id", owner_id).maybe_single().execute()
+        # Usa limit(1) em vez de maybe_single() para evitar 406 quando há duplicatas
+        result = self.db.table("customers").select("*").eq("phone", phone).eq("owner_id", owner_id).limit(1).execute()
         if result and result.data:
-            return CustomerProfile(**result.data)
+            return CustomerProfile(**result.data[0])
 
         # Novo lead — insere no banco e retorna o registro criado
         now = datetime.utcnow().isoformat()
@@ -62,7 +63,6 @@ class MemoryService:
         if total <= MAX_RAW_TURNS * 2:
             return
 
-        # Mensagens antigas que serão comprimidas
         to_compress = result.data[:total - MAX_RAW_TURNS * 2]
         if not to_compress:
             return
@@ -71,24 +71,21 @@ class MemoryService:
             from app.services.ai import AIService
             summary_text = await AIService().compress_conversation(to_compress)
             if summary_text:
-                # Pega notas do dono (preserva) e substitui o resumo antigo
-                customer = self.db.table("customers").select("summary").eq("phone", phone).eq("owner_id", owner_id).maybe_single().execute()
-                existing = (customer.data.get("summary") or "") if customer and customer.data else ""
-                # Preserva apenas notas do dono
+                customer = self.db.table("customers").select("summary").eq("phone", phone).eq("owner_id", owner_id).limit(1).execute()
+                existing = (customer.data[0].get("summary") or "") if customer and customer.data else ""
                 notes = "\n".join(line for line in existing.split("\n") if line.strip().startswith("[Nota"))
                 new_summary = f"{summary_text}\n{notes}".strip() if notes else summary_text
                 self.db.table("customers").update({"summary": new_summary}).eq("phone", phone).eq("owner_id", owner_id).execute()
         except Exception as e:
             logger.error(f"[Memory] Erro ao comprimir histórico: {e}")
 
-        # Deleta mensagens antigas independente de compressão ter funcionado
         old_ids = [m["id"] for m in to_compress]
         self.db.table("messages").delete().in_("id", old_ids).execute()
         logger.info(f"[Memory] Comprimiu {len(old_ids)} msgs de {phone}")
 
     async def get_owner_context(self, owner_id: str) -> Optional[dict]:
-        result = self.db.table("owners").select("*").eq("id", owner_id).maybe_single().execute()
-        return result.data if result and result.data else None
+        result = self.db.table("owners").select("*").eq("id", owner_id).limit(1).execute()
+        return result.data[0] if result and result.data else None
 
     _GREETINGS = {
         "oi", "olá", "ola", "hey", "eae", "eai", "e ai", "e aí",
@@ -109,15 +106,12 @@ class MemoryService:
     async def detect_and_save_name(self, phone: str, owner_id: str, message: str):
         """Detecta nome do lead em uma mensagem curta (resposta a 'qual seu nome?')."""
         msg = message.strip()
-        # Remove pontuação e emojis pra comparar
         clean = msg.replace("!", "").replace("?", "").replace(".", "").replace(",", "").strip()
         clean_lower = clean.lower()
 
-        # Ignora saudações e frases comuns
         if clean_lower in self._GREETINGS:
             return None
 
-        # Heurística: mensagem curta (1-3 palavras), sem URL, sem número
         words = clean.split()
         if 1 <= len(words) <= 3 and not any(c.isdigit() for c in clean) and "http" not in msg:
             name = clean.title()
