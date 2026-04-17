@@ -111,8 +111,57 @@ class MemoryService:
         "boas", "noite", "tarde", "dia",
     }
 
-    async def detect_and_save_name(self, phone: str, owner_id: str, message: str):
-        """Detecta nome do lead em uma mensagem curta (resposta a 'qual seu nome?')."""
+    # Palavras que indicam que o bot pediu o nome na última mensagem
+    _NAME_REQUEST_KEYWORDS = {
+        "nome", "como te chama", "como você se chama", "como voce se chama",
+        "se apresenta", "quem é você", "quem e voce", "seu nome",
+        "me diz seu nome", "qual o seu nome", "qual seu nome",
+        "como se chama", "pode se apresentar", "como prefere",
+        "como posso te chamar", "como posso chamar",
+    }
+
+    @staticmethod
+    def _looks_like_real_name(text: str) -> bool:
+        """Heurística: verifica se o texto parece um nome próprio real.
+        Rejeita: spam de teclado, chars repetidos em excesso, sem vogais, etc.
+        """
+        import re
+        vowels = set("aeiouáéíóúâêîôûãõàèìòùäëïöü")
+        for word in text.split():
+            w = word.lower()
+            # Deve ter pelo menos uma vogal
+            if not any(c in vowels for c in w):
+                return False
+            # Ratio de chars únicos vs total: mínimo 50%
+            # Pega "Geueueu" (3 únicos / 7 total = 43%) → rejeita
+            if len(w) > 3 and len(set(w)) / len(w) < 0.5:
+                return False
+            # Não pode ter 3+ chars idênticos consecutivos
+            if re.search(r"(.)\1{2,}", w):
+                return False
+        return True
+
+    async def detect_and_save_name(self, phone: str, owner_id: str, message: str, history: list = None):
+        """Detecta nome do lead SOMENTE quando o bot já perguntou pelo nome.
+        Também valida se o texto realmente parece um nome próprio.
+        """
+        # Só captura nome se o bot realmente pediu na mensagem anterior
+        if not history:
+            return None
+
+        # Verifica se a última mensagem do assistente pede o nome
+        last_assistant = ""
+        for msg in reversed(history):
+            if msg.get("role") == "assistant":
+                last_assistant = msg.get("content", "").lower()
+                break
+
+        if not last_assistant:
+            return None
+
+        if not any(kw in last_assistant for kw in self._NAME_REQUEST_KEYWORDS):
+            return None
+
         msg = message.strip()
         clean = msg.replace("!", "").replace("?", "").replace(".", "").replace(",", "").strip()
         clean_lower = clean.lower()
@@ -121,12 +170,22 @@ class MemoryService:
             return None
 
         words = clean.split()
-        if 1 <= len(words) <= 3 and not any(c.isdigit() for c in clean) and "http" not in msg:
-            name = clean.title()
-            await self.update_customer(phone, owner_id, {"name": name})
-            logger.info(f"[Memory] Nome detectado: {name} ({phone})")
-            return name
-        return None
+        if not (1 <= len(words) <= 3):
+            return None
+        if any(c.isdigit() for c in clean):
+            return None
+        if "http" in msg:
+            return None
+
+        # Valida se parece nome real (rejeita "Geueueu", spam, etc.)
+        if not self._looks_like_real_name(clean):
+            logger.info(f"[Memory] Texto rejeitado como nome (não parece nome real): '{clean}' ({phone})")
+            return None
+
+        name = clean.title()
+        await self.update_customer(phone, owner_id, {"name": name})
+        logger.info(f"[Memory] Nome detectado e salvo: {name} ({phone})")
+        return name
 
     async def set_channel(self, phone: str, owner_id: str, channel: str):
         """Salva o canal de origem do lead (reels, anúncio, stories, etc)."""
