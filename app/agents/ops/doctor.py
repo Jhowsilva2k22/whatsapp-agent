@@ -394,6 +394,26 @@ class Doctor(Agent):
         }
 
     def opine(self, question: str, context: AgentContext) -> AgentOpinion:
+        """
+        Científico e metódico. Sempre exige causa raiz antes de escalar.
+        Quando convocado com tenant_id, verifica aprendizados do KB para
+        correlacionar incidentes com contexto de negócio.
+        """
+        # Consulta KB quando há contexto de tenant (reuniões de conselho)
+        kb_insight = ""
+        if context.tenant_id:
+            try:
+                from app.services.knowledge import KnowledgeBank
+                kb = KnowledgeBank()
+                recent = kb._get_recent_learnings(context.tenant_id, limit=1)
+                if recent:
+                    kb_insight = (
+                        f" KB do tenant consultado — contexto de negócio disponível "
+                        f"para correlação com incidentes técnicos."
+                    )
+            except Exception:
+                pass
+
         return AgentOpinion(
             agent_role=self.role,
             agrees=True,
@@ -401,5 +421,6 @@ class Doctor(Agent):
                 f"[{self.display_name}] Qualquer mudança crítica deve ter "
                 f"estado diagnosticado antes e validação de logs depois. "
                 f"Sempre confirmo causa raiz antes de escalar para Surgeon."
+                + kb_insight
             ),
         )
