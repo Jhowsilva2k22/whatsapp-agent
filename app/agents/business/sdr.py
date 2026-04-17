@@ -1,22 +1,34 @@
 """
 EcoZap — SDR Agent (Sprint 2)
 ==============================
-Papel: Primeiro contato. Capta, identifica e qualifica leads.
+Papel: Primeiro contato. Constrói relacionamento genuíno e qualifica leads.
 Hierarquia: Especialista → COMMERCIAL → CTO → CEO
 
-Responsabilidades:
-- Recebe leads novos (score 0–50)
-- Identifica de onde veio o lead (canal: reels, indicação, ads, etc.)
-- Faz as perguntas certas para entender o problema real
-- Detecta se o lead é qualificado para o Closer (score >= 50)
-- Descarta leads fora do perfil com educação e leveza
-- Notifica owner e publica evento para o Closer quando lead está maduro
+Filosofia do SDR EcoZap:
+  Não é um vendedor. É um ser humano que genuinamente quer entender o outro.
+  A venda é consequência — nunca o discurso principal.
+  Ele lê o momento, identifica a temperatura emocional, cria vínculo real.
+  Usa psicologia comportamental avançada: espelhamento, ancoragem emocional,
+  reciprocidade, prova social, escassez percebida — sempre de forma orgânica.
+  O lead nunca deve sentir que está sendo vendido. Ele deve sentir que encontrou
+  alguém que realmente o entende.
 
-Opinion bias: "Quantidade não vale nada sem qualidade. Prefiro passar 3 leads certos que 30 errados."
+Pipeline de temperatura:
+  ❄ FRIO  → Curioso. Ainda não reconhece o problema. Modo: conexão, escuta, curiosidade.
+  🌡 MORNO → Reconhece o problema. Explorando opções. Modo: educação, construção de valor.
+  🔥 QUENTE → Quer resolver. Só precisa de segurança. Modo: prova, urgência suave, facilitação.
+
+Responsabilidades:
+  - Captura leads novos e entende de onde vieram
+  - Identifica a temperatura emocional antes de qualquer coisa
+  - Constrói relacionamento antes de falar de produto
+  - Detecta score >= 50 e passa ao Closer de forma natural
+  - Descarta leads fora do perfil com respeito e leveza
+
+Opinion bias: "Quem compra de amigo não sente que está comprando."
 """
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 from app.agents.base import Agent, AgentContext, AgentOpinion, AuthorityLevel
 from app.agents.registry import register
@@ -29,6 +41,28 @@ settings = get_settings()
 
 SCORE_THRESHOLD_CLOSER = 50   # acima disso → passa para o Closer
 
+# ── Estágios de temperatura ──────────────────────────────────────────────────
+TEMPERATURA_FRIO  = "frio"    # score 0–19
+TEMPERATURA_MORNO = "morno"   # score 20–49
+TEMPERATURA_QUENTE = "quente" # score >= 50 → Closer
+
+# ── Sinais de desconforto (o lead está incomodado ou com pressa) ─────────────
+SINAIS_DESCONFORTO = [
+    "para de", "chega", "tô ocupado", "não tenho tempo",
+    "não me interessa", "deixa pra lá", "me tira da lista",
+    "sai", "para", "não quero"
+]
+
+# ── Gatilhos de conexão — tópicos que revelam o que a pessoa valoriza ────────
+GATILHOS_CONEXAO = {
+    "familia":    ["filh", "esposa", "marido", "família", "pai", "mãe", "minha casa"],
+    "dinheiro":   ["fatura", "preço", "caro", "barato", "economiz", "gasto", "conta"],
+    "tempo":      ["tempo", "prazo", "urgente", "rápido", "hoje", "agora"],
+    "segurança":  ["garantia", "seguro", "confiáv", "certeza", "risco"],
+    "status":     ["melhor", "profissional", "qualidade", "premium", "diferente"],
+    "dor":        ["problema", "dificuldade", "estresse", "não tô conseguindo", "difícil"],
+}
+
 
 @register
 class SDR(Agent):
@@ -36,7 +70,7 @@ class SDR(Agent):
     display_name = "SDR"
     authority_level = AuthorityLevel.SPECIALIST
     department = "commercial"
-    opinion_bias = "quantidade não vale nada sem qualidade — prefere 3 leads certos a 30 errados"
+    opinion_bias = "quem compra de amigo não sente que está comprando — relacionamento primeiro, venda depois"
 
     autonomous_actions = [
         "send_message",
@@ -45,6 +79,8 @@ class SDR(Agent):
         "schedule_followup",
         "read_knowledge_base",
         "detect_channel",
+        "detect_temperature",
+        "build_rapport",
     ]
     requires_ceo_override = [
         "broadcast_to_all_customers",
@@ -54,28 +90,43 @@ class SDR(Agent):
 
     async def act(self, context: AgentContext) -> dict:
         """
-        Processa mensagem de lead novo ou em qualificação.
-        Usa o Qualifier legado e enriquece com lógica de pipeline.
+        Processa mensagem de lead em qualificação.
+        Abordagem: relacionamento genuíno antes de qualquer coisa comercial.
         """
         phone = context.payload.get("phone", "")
         owner_id = context.payload.get("owner_id", "")
         message = context.payload.get("message", "")
         current_score = context.payload.get("lead_score", 0)
 
-        logger.info("[SDR] Qualificando lead %s... score atual: %d", phone[:5] + "***", current_score)
+        temperatura = self._detectar_temperatura(current_score)
+        conexoes = self._detectar_conexoes(message)
+        desconforto = self._detectar_desconforto(message)
+
+        logger.info(
+            "[SDR] Lead %s | score=%d | temp=%s | conexões=%s",
+            phone[:5] + "***", current_score, temperatura, conexoes or "nenhuma"
+        )
 
         result = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "phone": phone,
             "owner_id": owner_id,
-            "action": "qualifying",
+            "action": "building_relationship",
+            "temperatura": temperatura,
+            "conexoes_detectadas": conexoes,
             "score_before": current_score,
             "score_after": current_score,
             "ready_for_closer": False,
             "disqualified": False,
         }
 
-        # Usa o Qualifier existente para processar a mensagem
+        # Lead sinalizou desconforto → pausa, respeita o espaço
+        if desconforto:
+            result["action"] = "cooling_down"
+            logger.info("[SDR] Lead %s sinalizou desconforto — recuando", phone[:5] + "***")
+            return result
+
+        # Processa via QualifierAgent (motor de conversa)
         try:
             from app.agents.qualifier import QualifierAgent
             qualifier = QualifierAgent()
@@ -86,20 +137,25 @@ class SDR(Agent):
                 agent_mode="qualifier",
             )
             new_score = process_result.get("lead_score", current_score)
+            new_status = process_result.get("lead_status", "qualificando")
             result["score_after"] = new_score
-            result["lead_status"] = process_result.get("lead_status", "qualificando")
+            result["lead_status"] = new_status
+            result["temperatura"] = self._detectar_temperatura(new_score)
 
         except Exception as e:
             logger.warning("[SDR] Falha ao processar via Qualifier: %s", e)
             new_score = current_score
+            new_status = "qualificando"
 
-        # Verifica se está pronto para o Closer
+        # Lead atingiu temperatura quente → passa para o Closer
         if new_score >= SCORE_THRESHOLD_CLOSER:
             result["ready_for_closer"] = True
             result["action"] = "handoff_to_closer"
 
-            logger.info("[SDR] Lead %s qualificado (score %d) → passando para Closer",
-                        phone[:5] + "***", new_score)
+            logger.info(
+                "[SDR] Lead %s amadureceu (score %d) → passando para Closer",
+                phone[:5] + "***", new_score
+            )
 
             # Publica evento para o Closer
             try:
@@ -109,24 +165,57 @@ class SDR(Agent):
                     "phone": phone,
                     "owner_id": owner_id,
                     "lead_score": new_score,
+                    "temperatura": TEMPERATURA_QUENTE,
+                    "conexoes": conexoes,
                     "tenant_id": context.tenant_id,
                 })
             except Exception as e:
                 logger.warning("[SDR] Falha ao publicar LEAD_QUALIFIED: %s", e)
 
-            # Notifica owner
+            # Notifica owner com contexto emocional do lead
             try:
+                conexoes_str = ", ".join(conexoes) if conexoes else "—"
                 notify_owner(
-                    f"🎯 *SDR — Lead Qualificado*\n\n"
-                    f"Um lead atingiu a pontuação necessária para ser trabalhado pelo Closer.\n\n"
+                    f"🔥 *Lead Amadureceu — Momento de fechar!*\n\n"
+                    f"Um lead que começou frio chegou ao ponto de compra naturalmente.\n\n"
                     f"*Pontuação:* {new_score}/100\n"
-                    f"*O que acontece agora:* O Closer assume a conversa e vai apresentar a oferta.",
+                    f"*O que ele valoriza:* {conexoes_str}\n"
+                    f"*O que acontece agora:* O atendente entra em modo de fechamento — "
+                    f"vai apresentar a oferta no momento certo, sem forçar.",
                     level="info",
                 )
             except Exception:
                 pass
 
         return result
+
+    # ──────────────────── helpers de psicologia ──────────────────
+
+    def _detectar_temperatura(self, score: int) -> str:
+        """Mapeia score numérico para temperatura emocional."""
+        if score >= SCORE_THRESHOLD_CLOSER:
+            return TEMPERATURA_QUENTE
+        if score >= 20:
+            return TEMPERATURA_MORNO
+        return TEMPERATURA_FRIO
+
+    def _detectar_conexoes(self, message: str) -> list:
+        """
+        Detecta gatilhos de conexão na mensagem.
+        Esses são os valores e dores reais do lead — usados pelo atendente
+        para criar ancoragem emocional sem forçar.
+        """
+        msg_lower = message.lower()
+        detectados = []
+        for categoria, palavras in GATILHOS_CONEXAO.items():
+            if any(p in msg_lower for p in palavras):
+                detectados.append(categoria)
+        return detectados
+
+    def _detectar_desconforto(self, message: str) -> bool:
+        """Detecta se o lead está com desconforto ou querendo sair da conversa."""
+        msg_lower = message.lower()
+        return any(sinal in msg_lower for sinal in SINAIS_DESCONFORTO)
 
     async def report_status(self) -> dict:
         """Conta leads em qualificação via Supabase."""
@@ -146,23 +235,23 @@ class SDR(Agent):
             "status": "operational",
             "leads_qualifying": count,
             "summary": (
-                f"{count} lead(s) em processo de qualificação agora."
+                f"{count} lead(s) em construção de relacionamento agora."
                 if count else
                 "Nenhum lead em qualificação no momento."
             ),
         }
 
     def opine(self, question: str, context: AgentContext) -> AgentOpinion:
-        lead_keywords = ["lead", "qualific", "captação", "novo cliente", "funil"]
+        lead_keywords = ["lead", "qualific", "captação", "novo cliente", "funil", "abordagem"]
         if any(kw in question.lower() for kw in lead_keywords):
             return AgentOpinion(
                 agent_role=self.role,
                 agrees=True,
                 reasoning=(
-                    f"[{self.display_name}] Qualquer mudança no funil de qualificação "
-                    f"deve ser testada com leads de teste antes de ir para produção. "
-                    f"O score mínimo para Closer está em {SCORE_THRESHOLD_CLOSER} — "
-                    f"posso ajustar se necessário."
+                    f"[{self.display_name}] O funil começa com conexão humana. "
+                    f"Qualquer mudança na abordagem deve ser testada com leads reais — "
+                    f"temperatura emocional não se mede em A/B test, se mede em conversa. "
+                    f"Score mínimo para Closer: {SCORE_THRESHOLD_CLOSER}."
                 ),
             )
         return AgentOpinion(

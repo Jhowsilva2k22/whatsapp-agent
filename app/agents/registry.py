@@ -104,7 +104,8 @@ def load_all_agents():
         from app.agents.business import sdr         # noqa: F401
         from app.agents.business import closer      # noqa: F401
         from app.agents.business import consultant  # noqa: F401
-        logger.info("[Registry] Equipe COMMERCIAL carregada (Attendant + SDR + Closer + Consultant)")
+        from app.agents.business import trainer     # noqa: F401
+        logger.info("[Registry] Equipe COMMERCIAL carregada (Attendant + SDR + Closer + Consultant + Trainer)")
     except ImportError as e:
         logger.warning(f"[Registry] Business parcialmente carregado: {e}")
 

@@ -36,6 +36,19 @@ Responda APENAS o JSON."""
         except Exception:
             return
         self.db.table("learnings").insert({"owner_id": owner_id, "date": datetime.utcnow().date().isoformat(), "data": learnings, "hot_leads_count": hot_count, "total_conversations": len(set(m['phone'] for m in messages.data))}).execute()
+
+        # ── Alimenta o Knowledge Bank com os aprendizados do dia ────────────
+        # Tudo que o atendente aprende nas conversas vai para o banco de
+        # conhecimento estruturado e é usado nas próximas interações.
+        try:
+            from app.services.knowledge import KnowledgeBank
+            kb = KnowledgeBank()
+            kb_saved = kb.add_from_learning(owner_id, learnings)
+            logger.info("[Learning] %d item(s) novo(s) adicionados ao Knowledge Bank para owner %s", kb_saved, owner_id[:8])
+        except Exception as ke:
+            logger.warning("[Learning] Falha ao alimentar Knowledge Bank: %s", ke)
+
+        # ── Mantém FAQs legadas na tabela owners (retrocompatibilidade) ─────
         if learnings.get("suggested_qa"):
             owner = self.db.table("owners").select("faqs").eq("id", owner_id).maybe_single().execute()
             existing_faqs = (owner.data.get("faqs") if owner and owner.data else None) or []
