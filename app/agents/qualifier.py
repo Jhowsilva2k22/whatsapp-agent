@@ -29,7 +29,6 @@ def _detect_channel(message: str) -> str:
 
 
 # ─── Busca web em tempo real ───────────────────────────────────────────
-# Detecta @handles e URLs — qualquer coisa que exige dados externos em tempo real
 _WEB_SEARCH_PAT = re.compile(
     r'@([\w.]{2,30})|https?://\S+',
     re.IGNORECASE,
@@ -45,7 +44,6 @@ def _detect_web_search_need(message: str):
     if full.startswith("@"):
         handle = m.group(1)
         return True, f'"{handle}" Instagram perfil bio negócio informações'
-    # URL — busca informações sobre o domínio/site
     domain = re.sub(r'https?://(www\.)?', '', full).split('/')[0]
     return True, f'site "{domain}" o que é informações sobre'
 
@@ -213,13 +211,14 @@ class QualifierAgent:
             if ": " in message:
                 display_message = message.split(": ", 1)[1]
             elif message.startswith("[Imagem"):
-                display_message = "[Imagem recebida]"
+                display_message = ""  # sem caption — será tratado abaixo se download falhar
 
         if media_type in ("image", "audio", "document") and message_id:
             media_base64 = await sender.download_media(message_id, phone=phone, channel=ch, instance=evolution_instance)
             if not media_base64:
                 logger.warning(f"[Qualifier] falha ao baixar mídia tipo={media_type} id={message_id}")
 
+        # ── Áudio: transcrever ────────────────────────────────────────────────
         if media_type == "audio" and media_base64:
             transcription = await self.ai.transcribe_audio(media_base64)
             if transcription:
@@ -227,7 +226,24 @@ class QualifierAgent:
             media_base64 = None
             media_type = "text"
         elif media_type == "audio" and not media_base64:
-            display_message = "[Áudio recebido - não foi possível processar]"
+            # Sem transcrição: pede pra escrever de forma natural
+            fallback_audio = "Vi que você mandou um áudio! Aqui fica mais fácil por texto — pode escrever o que precisa? 😊"
+            await self.memory.save_turn(phone, owner_id, "assistant", fallback_audio)
+            await sender.send_typing(phone, channel=ch, duration=1500, instance=evolution_instance)
+            await sender.send_message(phone, fallback_audio, channel=ch, instance=evolution_instance)
+            return
+
+        # ── Imagem: fallback quando download falha ────────────────────────────
+        if media_type == "image" and not media_base64:
+            if not display_message.strip():
+                # Sem caption E sem conteúdo: pede pra reenviar
+                fallback_img = "Opa, a imagem não carregou aqui 📸 Pode mandar de novo?"
+                await self.memory.save_turn(phone, owner_id, "assistant", fallback_img)
+                await sender.send_typing(phone, channel=ch, duration=1200, instance=evolution_instance)
+                await sender.send_message(phone, fallback_img, channel=ch, instance=evolution_instance)
+                return
+            # Tem caption: processa como texto normal
+            media_type = "text"
 
         if customer.lead_status == "qualificando" and customer.total_messages and customer.total_messages > 3:
             if customer.summary and "Nota " in (customer.summary or ""):
@@ -323,16 +339,12 @@ class QualifierAgent:
                 "Exemplo: 'Entendi perfeitamente. Deixa eu verificar isso com mais cuidado pra te dar a melhor resposta. Já te retorno!'"
             )
 
-        # ── Busca web em tempo real: @handles, URLs ────────────────────────────────
+        # ── Busca web em tempo real: @handles, URLs ───────────────────────────
         web_context = ""
         _needs_search, _search_query = _detect_web_search_need(display_message)
         if _needs_search and _search_query:
             logger.info("[Qualifier] Busca web: '%s'", _search_query[:60])
             web_context = await _fetch_web_context(_search_query)
-            if web_context:
-                logger.info("[Qualifier] Contexto web obtido (%d chars)", len(web_context))
-            else:
-                logger.info("[Qualifier] Busca web sem resultados para '%s'", _search_query[:60])
 
         web_block = (
             "\n\n━━ CONTEXTO WEB (AGORA) ━━\n"

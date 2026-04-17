@@ -46,29 +46,77 @@ class WhatsAppService:
                 pass
 
     async def download_media_base64(self, message_id: str, phone: str = "", instance: str = None) -> str | None:
-        """Baixa mídia de uma mensagem via Evolution API e retorna base64."""
+        """
+        Baixa mídia de uma mensagem via Evolution API e retorna base64.
+        Tenta múltiplos formatos de payload para compatibilidade com
+        diferentes versões da Evolution API.
+        """
         inst = self._instance(instance)
+        raw_phone = (
+            phone.replace("+", "").replace("-", "").replace(" ", "")
+            .replace("@s.whatsapp.net", "")
+        ) if phone else ""
+
         url = f"{self.base_url}/chat/getBase64FromMediaMessage/{inst}"
-        key: dict = {"id": message_id, "fromMe": False}
-        if phone:
-            raw = phone.replace("+", "").replace("-", "").replace(" ", "").replace("@s.whatsapp.net", "")
-            key["remoteJid"] = f"{raw}@s.whatsapp.net"
-        payload = {"message": {"key": key}, "convertToMp4": False}
+
+        # Tentativa 1: com remoteJid (formato padrão)
+        # Tentativa 2: sem remoteJid (algumas versões não precisam)
+        payloads = [
+            {
+                "message": {
+                    "key": {
+                        "id": message_id,
+                        "fromMe": False,
+                        "remoteJid": f"{raw_phone}@s.whatsapp.net",
+                    }
+                },
+                "convertToMp4": False,
+            },
+            {
+                "message": {
+                    "key": {
+                        "id": message_id,
+                        "fromMe": False,
+                    }
+                },
+                "convertToMp4": False,
+            },
+        ]
+
         async with httpx.AsyncClient(timeout=30) as client:
-            try:
-                response = await client.post(url, json=payload, headers=self.headers)
-                logger.info(f"[Media] status={response.status_code} id={message_id} phone={phone} inst={inst}")
-                if response.status_code in (200, 201):
-                    data = response.json()
-                    b64 = data.get("base64") or data.get("data", {}).get("base64")
-                    if b64:
-                        logger.info(f"[Media] download OK id={message_id} bytes={len(b64)}")
-                        return b64
-                    logger.warning(f"[Media] base64 ausente na resposta: {list(data.keys())}")
-                else:
-                    logger.error(f"[Media] erro HTTP {response.status_code}: {response.text[:300]}")
-            except Exception as e:
-                logger.error(f"[Media] exceção ao baixar mídia {message_id}: {e}")
+            for attempt, payload in enumerate(payloads, start=1):
+                try:
+                    response = await client.post(url, json=payload, headers=self.headers)
+                    logger.info(
+                        f"[Media] attempt={attempt} status={response.status_code} "
+                        f"id={message_id} phone={raw_phone} inst={inst}"
+                    )
+                    if response.status_code in (200, 201):
+                        try:
+                            data = response.json()
+                        except Exception:
+                            logger.warning(f"[Media] attempt={attempt} resposta não é JSON: {response.text[:300]}")
+                            continue
+                        b64 = (
+                            data.get("base64")
+                            or data.get("data", {}).get("base64")
+                        )
+                        if b64 and len(b64) > 100:
+                            logger.info(f"[Media] OK attempt={attempt} id={message_id} bytes={len(b64)}")
+                            return b64
+                        logger.warning(
+                            f"[Media] attempt={attempt} base64 ausente ou curto. "
+                            f"keys={list(data.keys())} body={str(data)[:300]}"
+                        )
+                    else:
+                        logger.error(
+                            f"[Media] attempt={attempt} HTTP {response.status_code}: "
+                            f"{response.text[:500]}"
+                        )
+                except Exception as e:
+                    logger.error(f"[Media] attempt={attempt} exceção: {e}")
+
+        logger.error(f"[Media] todas as tentativas falharam para id={message_id}")
         return None
 
     def parse_webhook(self, payload: dict):
@@ -76,7 +124,6 @@ class WhatsAppService:
         try:
             event = payload.get("event", "")
             # Evolution API pode enviar "MESSAGES_UPSERT" (uppercase) ou "messages.upsert" (lowercase)
-            # Normalizar antes de comparar para aceitar qualquer variação
             if event.lower().replace("_", ".") != "messages.upsert":
                 return None
 
@@ -89,7 +136,7 @@ class WhatsAppService:
             message_data = data.get("message", {})
 
             # --- Extrai o número de telefone real ---
-            # WhatsApp com Linked Devices envia remoteJid no formato "@lid" (Linked Device ID).
+            # WhatsApp com Linked Devices envia remoteJid no formato "@lid".
             # Nesse caso, o número real está em remoteJidAlt no formato @s.whatsapp.net.
             remote_jid = key.get("remoteJid", "")
             if "@lid" in remote_jid:
@@ -98,7 +145,6 @@ class WhatsAppService:
                     logger.debug(f"[Webhook] LID detectado: {remote_jid} → usando alt: {alt_jid}")
                     remote_jid = alt_jid
                 else:
-                    # Sem alt: extrai apenas os dígitos do LID como fallback
                     logger.warning(f"[Webhook] LID sem remoteJidAlt: {remote_jid}")
 
             phone = (
@@ -138,7 +184,7 @@ class WhatsAppService:
             if audio:
                 return IncomingMessage(
                     instance=instance, phone=phone,
-                    message="[Áudio recebido - por favor, escreva sua mensagem em texto]",
+                    message="[Áudio recebido]",
                     message_id=message_id, media_type="audio",
                 )
 
@@ -160,8 +206,18 @@ class WhatsAppService:
             if doc:
                 filename = doc.get("fileName") or "documento"
                 caption = doc.get("caption") or ""
-                mime = doc.get("mimetype") or ""
-                tipo = "PDF" if "pdf" in mime.lower() else "Documento"
+                mime = (doc.get("mimetype") or "").lower()
+
+                # JPEG/PNG/WEBP enviados como documento → tratar como imagem
+                _image_mimes = ("image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif")
+                if any(mime.startswith(m) for m in _image_mimes):
+                    text = f"[Imagem]{': ' + caption if caption else ' recebida'}"
+                    return IncomingMessage(
+                        instance=instance, phone=phone, message=text,
+                        message_id=message_id, media_type="image",
+                    )
+
+                tipo = "PDF" if "pdf" in mime else "Documento"
                 text = f"[{tipo}: {filename}]"
                 if caption:
                     text += f" {caption}"
